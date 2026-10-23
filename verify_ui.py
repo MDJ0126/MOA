@@ -21,5 +21,8 @@ with tempfile.TemporaryDirectory(dir=root) as data:
         result=subprocess.run([str(node),'test_ui.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(result.stdout);print(result.stderr)
         if result.returncode:raise SystemExit(result.returncode)
+        drafts=subprocess.run([str(node),'test_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        print(drafts.stdout);print(drafts.stderr)
+        if drafts.returncode:raise SystemExit(drafts.returncode)
     finally:
         process.terminate();process.wait(timeout=10)

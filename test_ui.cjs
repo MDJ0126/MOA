@@ -62,6 +62,7 @@ async function main(){
  assert.equal(messageKeys.length,2);assert.ok(messageKeys[0]);assert.equal(messageKeys[0],messageKeys[1]);
  const afterMessage=await(await fetch(base+'/api/state')).json();assert.equal(afterMessage.deliveries.filter(m=>m.sender==='user'&&JSON.parse(m.content).summary==='담당자 수신 지시 테스트').length,1);
  let releaseMessage,holdMessage;
+ await until(()=>!d.querySelector('[data-action="send-message"]').disabled,'previous message action complete');
  const held=new Promise(resolve=>holdMessage=resolve);
  w.fetch=async(path,options)=>{const response=await messageFetch(path,options);if(path==='/api/messages'){releaseMessage=()=>holdMessage();await held}return response};
  input('#messageText','보내는 중인 지시');click('[data-action="send-message"]');await until(()=>releaseMessage,'held message response');
