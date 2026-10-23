@@ -68,4 +68,20 @@ class HistoryRecoveryTests(unittest.TestCase):
                     self.assertIsNone(row['content']);self.assertTrue(result['plan_unavailable'])
             with store.connect() as c:self.assertIsNone(c.execute('SELECT content FROM messages WHERE seq=?',(seq,)).fetchone()[0])
 
+    def test_structured_invalid_recipients_are_not_broadcast(self):
+        from setup_config import legacy_plan
+        for raw in (json.dumps(legacy_plan()),'{broken'):
+            with self.subTest(plan=raw),self.server(raw) as (store,tid,base):
+                records=[json.dumps({'recipient':value,'content':'DAMAGED_RECIPIENT'}) for value in ([],{},None,17)]
+                with store.connect() as c:
+                    c.executemany('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',[(tid,'user','instruction',content,time.time()) for content in records])
+                for route in ('/api/logs?task=','/api/logs/export?task='):
+                    with urllib.request.urlopen(base+route+tid,timeout=5) as response:all_messages=json.load(response)['messages']
+                    expected=list(reversed(records)) if route.startswith('/api/logs?') else records
+                    self.assertEqual([m['content'] for m in all_messages if 'DAMAGED_RECIPIENT' in (m['content'] or '')],expected)
+                    with urllib.request.urlopen(base+route+tid+'&agent=developer',timeout=5) as response:filtered=json.load(response)['messages']
+                    self.assertFalse(any('DAMAGED_RECIPIENT' in (m['content'] or '') for m in filtered))
+                with store.connect() as c:
+                    self.assertEqual([r[0] for r in c.execute("SELECT content FROM messages WHERE task_id=? AND kind='instruction' AND content LIKE '%DAMAGED_RECIPIENT%' ORDER BY seq",(tid,))],records)
+
 if __name__=='__main__':unittest.main()

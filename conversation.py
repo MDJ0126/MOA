@@ -19,9 +19,11 @@ def for_agent(message,agent,plan):
     if agent not in ids and agent in plan['assignment']:
         if message.get('capability')==agent or message['agent']==agent:return True
         recipient=recipient_of(message)
+        if not isinstance(recipient,str):return False
         return message['agent']=='user' and (recipient in (agent,plan['assignment'][agent]) or not recipient and message['kind']=='instruction')
     if message['agent']==agent:return True
     recipient=recipient_of(message)
+    if not isinstance(recipient,str):return False
     if recipient==agent:return True
     if recipient and recipient not in ids and plan['assignment'].get(recipient)==agent:return True
     return agent in ids and not recipient and message['agent']=='user' and message['kind']=='instruction'
@@ -30,7 +32,7 @@ def for_agent(message,agent,plan):
 def enrich(message,plan):
     value=dict(message);recipient=recipient_of(value)
     ids={a['id'] for a in plan['agents']}
-    value['recipient']=recipient if recipient in ids else plan['assignment'].get(recipient,recipient)
+    value['recipient']=recipient if not isinstance(recipient,str) or recipient in ids else plan['assignment'].get(recipient,recipient)
     return value
 
 
@@ -58,7 +60,8 @@ def task_messages(connection,tid,plan,agent='',limit=50001,before=None,descendin
     result=[]
     for row in connection.execute(query,args):
         message=enrich(row,plan) if plan is not None else dict(row)
-        matches=for_agent(message,agent,plan) if plan is not None else (message['agent']==agent or recipient_of(message)==agent or message['agent']=='user' and message['kind']=='instruction' and not recipient_of(message))
+        recipient=recipient_of(message)
+        matches=for_agent(message,agent,plan) if plan is not None else (message['agent']==agent or isinstance(recipient,str) and (recipient==agent or message['agent']=='user' and message['kind']=='instruction' and not recipient))
         if not agent or matches:
             result.append(message)
             if len(result)>=limit:break
