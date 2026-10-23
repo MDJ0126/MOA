@@ -15,13 +15,19 @@ ROOT=Path(__file__).resolve().parent
 
 def write_status(path,status):
     """A transient Windows reader lock must not terminate managed processes."""
-    temp=path.with_suffix(path.suffix+'.tmp')
     for attempt in range(5):
+        temp=path.with_name('.'+path.name+'-'+secrets.token_hex(16)+'.tmp');created=False
         try:
-            temp.write_text(json.dumps(status),encoding='utf-8');temp.replace(path)
+            with temp.open('x',encoding='utf-8') as stream:
+                created=True;stream.write(json.dumps(status))
+            temp.replace(path)
             return True
         except OSError:
             if attempt<4:time.sleep(.05)
+        finally:
+            if created:
+                try:temp.unlink(missing_ok=True)
+                except OSError:pass
     return False
 
 def acquire(path):
