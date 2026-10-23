@@ -328,3 +328,16 @@ Start.ps1 -Demo와 python app.py --demo는 기본 포트 8767, 별도 data-demo�
 스크린샷 PNG 10장은 약 595KB이며 가이드 9개에 사용합니다. 기본 이미지 한 장과 짧은 단계 3개, 설치·상세 설명의 접이식 구조입니다. 작업 목록과 VM 동작 편집의 보충 이미지는 상세 안에 둡니다. 이미지 링크로 원본을 확대합니다. 촬영 시각·브라우저 버전·뷰포트·소스/이미지 SHA-256을 manifest.json에 기록했습니다. 재생성 명령은 README에 문서화했습니다. 샘플 서버에도 방금 촬영한 PNG를 복사한 뒤 가이드 검수를 하므로 이전 사진을 검수하는 경로를 제거했습니다.
 
 검증: 설치 자산 없는 소스에서 전체 단위 176개·DOM 세 묶음·635개 작업/405개 대화 조회를 통과했습니다. HTTP에서 PNG 종류·서명과 허용 목록 밖/경로 이탈 404를 확인했습니다. 실제 브라우저에서 9개 가이드의 이미지 로딩·3단계·접힌 상세·데스크톱 가로 넘침을 확인하고 첫 가이드의 데스크톱/모바일 원본을 직접 검수했습니다. 앱 화면 10장도 직접 확인했습니다. 운영 작업 0개와 Slack disabled를 확인한 뒤 앱만 반영했고 PID 44592·소스 해시·작업 루프·10 PNG와 9 HTML의 제공 바이트/해시 일치를 확인했습니다. 모델/감독은 재시작하지 않았습니다. 새 OS 설치·네이티브 컴퓨터 유즈·게임 엔진·실제 Slack·VM 화면 업무 전체 검증은 남습니다.
+
+
+## Windows VM 사용권 안내·WHPX 시작 전 조회
+
+이번 묶음의 6개 기준은 Sandbox/일반 Windows/Linux 안내 구분, 공식 API 기반 읽기 전용 조회, 미지원/미확인 상태의 새 프로세스 생성 차단, 기존 실행 VM의 재시작·중복 조회 방지, 전체 소스 회귀·문서, 운영 반영·커밋·푸시입니다. 전체 지속 목표는 활성 상태입니다.
+
+Microsoft의 Windows Sandbox 지원 에디션/사용권 설명과 WHvGetCapability 문서를 확인했습니다. 설치 사용자 가이드의 접힌 상세에 Linux VM·Sandbox·별도 Windows VM을 구분하고 모아의 Sandbox 연동은 미구현임을 명시했습니다. 기본 이미지·3단계는 바꾸지 않았습니다. Windows Home 여부만으로 WHPX를 단정하지 않습니다. 실제 현재 호스트의 WHvCapabilityCodeHypervisorPresent 조회는 true였으며 그 원인이 어떤 호스트 기능인지나 실제 QEMU WHPX 부팅 성공은 검증하지 않았습니다.
+
+기존 WHPX 경로는 호스트 하이퍼바이저 조회 없이 실행 도구 생성으로 진행했습니다. 이제 System32에서만 WinHvPlatform.dll을 읽고 공식 BOOL 결과·HRESULT·기록 크기를 확인합니다. VM 파티션을 만들거나 Windows 기능을 바꾸지 않습니다. 새 WHPX 시작은 조회가 확실히 true일 때만 진행하며 미지원·미확인 상태에는 TCG 또는 호스트 설정 확인을 안내합니다. 이미 실행 중인 소유 VM의 상태 응답은 기존 경로대로 반환해 재실행하지 않습니다. 실제 VM 시작·종료·입력·캡처·Slack 접속/발송·화면 조작은 이번 묶음에서 수행하지 않았습니다.
+
+추가 테스트 5개와 기존 VM 17개가 통과했습니다. 네이티브 API의 true/false/HRESULT 실패/결과 길이 미확인, API 누락, 비Windows, 프로세스 생성 전 차단, 기존 VM 상태 반환의 조회·생성 미호출을 대역으로 검사했습니다. 실제 API 조회와 대역 성공을 실제 WHPX 게스트 실행 성공으로 확대하지 않습니다. 공식 근거: https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/ 및 https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/funcs/whvgetcapability .
+
+최종 검증: 설치 자산 없는 소스 복사본에서 단위 전체 181개·DOM 세 묶음·635개 작업/405개 대화 조회를 통과했습니다. 운영 작업 0개와 Slack disabled 확인 후 앱만 재실행했고 새 PID 51740·작업 루프·앱 소스 해시 및 환경 가이드 제공 바이트를 확인했습니다. vm_runtime 변경은 새 앱 프로세스에서 가져오며 앱 해시를 VM 모듈 해시 자체라고 주장하지 않습니다. 모델 PID 43392는 유지했습니다. 기본 UI/스크린샷·Windows 기능·가속 설정값은 변경하지 않았습니다. 공식 API true는 실제 QEMU WHPX 부팅이나 Windows 게스트 사용권 확인 결과가 아닙니다. 커밋·푸시 확인을 마지막 기준으로 기록합니다.

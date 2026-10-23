@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import uuid
+import ctypes
 from setup_config import read_setting,write_setting,checked_write_setting,hardware
 
 ROOT=Path(__file__).resolve().parent
@@ -16,6 +17,18 @@ DEFAULT={'enabled':False,'memory_mb':512,'cpus':1,'accelerator':'tcg','iso':'run
 KEYS=set('abcdefghijklmnopqrstuvwxyz0123456789')|{'ret','esc','spc','tab','backspace','up','down','left','right','home','end','delete','shift','ctrl','alt','meta_l','minus','equal','dot','comma','slash','backslash','semicolon','apostrophe','grave','bracket_left','bracket_right'}|{f'f{i}' for i in range(1,13)}
 
 def settings(store):return read_setting(store,'vm',DEFAULT)
+
+def whpx_capability():
+    """Read the host capability only; never create a partition or change features."""
+    if os.name!='nt':return {'available':False,'reason':'WHPX는 Windows 호스트에서만 사용할 수 있습니다.'}
+    try:query=ctypes.WinDLL('WinHvPlatform.dll',winmode=0x800).WHvGetCapability
+    except (OSError,AttributeError):return {'available':False,'reason':'Windows Hypervisor Platform API를 사용할 수 없습니다.'}
+    query.argtypes=[ctypes.c_int,ctypes.c_void_p,ctypes.c_uint,ctypes.POINTER(ctypes.c_uint)]
+    query.restype=ctypes.c_long
+    present=ctypes.c_int();written=ctypes.c_uint()
+    result=query(0,ctypes.byref(present),ctypes.sizeof(present),ctypes.byref(written))
+    if result<0 or written.value!=ctypes.sizeof(present):return {'available':None,'reason':'Windows 하이퍼바이저 상태를 확인하지 못했습니다.'}
+    return {'available':bool(present.value),'reason':'Windows 하이퍼바이저 실행 확인' if present.value else 'Windows 하이퍼바이저가 실행 중이 아닙니다.'}
 def same_configuration(left,right):
     return all(left.get(key,default)==right.get(key,default) for key,default in DEFAULT.items())
 def validate_actions(value,pipeline):
@@ -168,6 +181,9 @@ class VM:
             try:return self.qmp('query-status')
             except (OSError,ValueError):
                 if pid_alive(self.session().get('pid')):raise ValueError('기존 VM 프로세스의 제어 연결을 확인하지 못했습니다. 중복 VM은 시작하지 않습니다.') from None
+        if config['accelerator']=='whpx':
+            capability=whpx_capability()
+            if capability['available'] is not True:raise ValueError(capability['reason']+' TCG를 사용하거나 Windows Hypervisor Platform 설정을 확인한 뒤 다시 시도하세요.')
         executable=ROOT/'runtime/qemu/qemu-system-x86_64.exe';iso=(ROOT/config['iso']).resolve()
         if not executable.is_file() or not iso.is_file():raise ValueError('VM 런타임과 부팅 ISO를 먼저 준비하세요. install_vm.py를 실행하세요.')
         available=hardware().get('available_ram_gib')
