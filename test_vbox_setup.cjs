@@ -8,12 +8,12 @@ async function main(){
  const absent=await fetch(base+'/api/vbox/recovery',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({action:'inspect'})});assert.equal(absent.status,200);assert.equal((await absent.json()).can_clear,false);
  const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
- let prepareCount=0,late=null,delay=false,record=null,recoveryAllowed=false,clearCount=0;
+ let prepareCount=0,late=null,delay=false,record=null,recoveryAllowed=false,clearCount=0,storedPlan=null,planCount=0;
  w.fetch=(path,options)=>{
-  if(path==='/api/vbox/plan'){const result={id:'fake-plan',target_os:'windows',preset:{memory_mb:4096,cpus:2},disk_mb:131072,recommendation_note:'현재 여유 자원 확인 필요',issues:[],can_prepare:true,commands:[['createvm','<img src=x onerror=alert(1)>']],scope:'파일 준비만'};if(delay)return new Promise(resolve=>{late=()=>resolve(new Response(JSON.stringify(result)))});return Promise.resolve(new Response(JSON.stringify(result)))}
+  if(path==='/api/vbox/plan'){planCount++;const request=JSON.parse(options.body);const result={request:{...request,preset:request.preset==='auto'?'balanced':request.preset},requested_preset:request.preset,iso_sha256:'0'.repeat(64),official_checksum_verified:false,iso_detection:{os_type_id:'Windows11_64',unattended_supported:true},id:'fake-plan',target_os:'windows',preset:{memory_mb:4096,cpus:2},disk_mb:131072,recommendation_note:'현재 여유 자원 확인 필요',issues:[],can_prepare:true,commands:[['createvm','<img src=x onerror=alert(1)>']],scope:'파일 준비만'};storedPlan=result;if(delay)return new Promise(resolve=>{late=()=>resolve(new Response(JSON.stringify(result)))});return Promise.resolve(new Response(JSON.stringify(result)))}
   if(path==='/api/vbox/prepare'){prepareCount++;assert.equal(JSON.parse(options.body).plan_id,'fake-plan');record={state:'prepared',completed_steps:6,scope:'부팅하지 않음'};return Promise.resolve(new Response(JSON.stringify(record)))}
-  if(path==='/api/vbox/recovery'){const payload=JSON.parse(options.body);if(payload.action==='clear'){clearCount++;assert.equal(payload.record_id,'fake-plan');assert.ok(payload.request_key.length>=8);record=null;return Promise.resolve(new Response(JSON.stringify({cleared:true,record_id:'fake-plan'})))}return Promise.resolve(new Response(JSON.stringify({record_id:'fake-plan',name:'fake-vm',can_clear:recoveryAllowed,reason:recoveryAllowed?'VM 등록과 폴더가 없습니다.':'VM 등록이 남아 있습니다.'})))}
-  if(path==='/api/vbox/setup')return Promise.resolve(new Response(JSON.stringify({preparation:record,plan:null})));
+  if(path==='/api/vbox/recovery'){const payload=JSON.parse(options.body);if(payload.action==='clear'){clearCount++;assert.equal(payload.record_id,'fake-plan');assert.ok(payload.request_key.length>=8);record=null;storedPlan=null;return Promise.resolve(new Response(JSON.stringify({cleared:true,record_id:'fake-plan'})))}return Promise.resolve(new Response(JSON.stringify({record_id:'fake-plan',name:'fake-vm',can_clear:recoveryAllowed,reason:recoveryAllowed?'VM 등록과 폴더가 없습니다.':'VM 등록이 남아 있습니다.'})))}
+  if(path==='/api/vbox/setup')return Promise.resolve(new Response(JSON.stringify({preparation:record,plan:storedPlan})));
   return fetch(base+path,options);
  };
  const timers=new Set(),set=w.setTimeout.bind(w),clear=w.clearTimeout.bind(w);let closing=false;
@@ -27,6 +27,8 @@ async function main(){
   input('profileLocation','shared_vm');input('profileOS','windows');input('vboxIso','runtime/install.iso','input');click('plan-vbox');
   await until(()=>!d.querySelector('[data-action="prepare-vbox"]').hidden,'reviewed plan shown');
   assert.ok(d.querySelector('#vboxSummary').textContent.includes('CPU 2개'));assert.equal(d.querySelector('#vboxCommands img'),null);
+  assert.ok(d.querySelector('#vboxSummary').textContent.includes('Windows11_64'));assert.ok(d.querySelector('#vboxSummary').textContent.includes('공식 체크섬 미대조'));
+  const count=planCount;input('vboxSha256','','input');assert.equal(d.querySelector('[data-action="prepare-vbox"]').hidden,true);click('status-vbox');await until(()=>!d.querySelector('[data-action="prepare-vbox"]').hidden,'completed preview recovered without rehash');assert.equal(planCount,count);
   input('vboxPreset','light');assert.equal(d.querySelector('[data-action="prepare-vbox"]').hidden,true);
   click('plan-vbox');await until(()=>!d.querySelector('[data-action="prepare-vbox"]').hidden,'new plan');click('prepare-vbox');
   await until(()=>d.querySelector('#vboxSummary').textContent.includes('준비 완료 기록'),'fake preparation receipt');assert.equal(prepareCount,1);assert.equal(d.querySelector('[data-action="prepare-vbox"]').hidden,true);

@@ -9,6 +9,7 @@ import subprocess
 import time
 import uuid
 import threading
+import hashlib
 from contextlib import contextmanager
 from environment_profiles import recommend,validate,identity
 from setup_config import read_setting,write_setting
@@ -98,6 +99,40 @@ def checked_iso(value):
     if path.is_symlink() or not resolved.is_relative_to(ROOT.resolve()) or not resolved.is_file() or resolved.suffix.lower()!='.iso':raise ValueError('프로젝트 내부의 실제 ISO 파일을 지정하세요.')
     return resolved
 
+def iso_fingerprint(path):
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        before=os.fstat(stream.fileno())
+        for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+        after=os.fstat(stream.fileno())
+    current=path.stat()
+    if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns) or (after.st_size,after.st_mtime_ns,after.st_ino)!=(current.st_size,current.st_mtime_ns,current.st_ino):raise ValueError('읽는 동안 ISO가 바뀌었습니다. 다시 확인하세요.')
+    return digest.hexdigest(),[after.st_size,after.st_mtime_ns]
+
+def iso_metadata(value,target):
+    fields={};images=[]
+    for line in value.splitlines():
+        if not line.strip():continue
+        key,sep,raw=line.partition('=')
+        if not sep or not re.fullmatch(r'[A-Za-z][A-Za-z0-9]*',key) or key in fields:raise ValueError('ISO 감지 출력 형식을 확인하지 못했습니다.')
+        raw=raw.strip()
+        if raw.startswith('"'):
+            try:item=json.loads(raw)
+            except ValueError:raise ValueError('ISO 감지 값 형식 오류') from None
+        else:item=raw
+        if not isinstance(item,str) or len(item)>4096:raise ValueError('ISO 감지 값 크기·형식 오류')
+        fields[key]=item
+        if key.startswith('ImageIndex'):
+            if not re.fullmatch(r'ImageIndex[1-9][0-9]{0,4}',key) or len(images)>=64:raise ValueError('설치 이미지 목록을 확인하지 못했습니다.')
+            images.append({'index':int(key[10:]),'name':item})
+    os_type=fields.get('OSTypeId','')
+    matches=os_type=='Windows11_64' if target=='windows' else bool(re.fullmatch(r'(Ubuntu|Debian|Fedora|RedHat|Oracle|OpenSUSE|SUSE|ArchLinux|Gentoo|Mandriva|Turbolinux|Linux)[A-Za-z0-9_]*_64',os_type))
+    if not matches:raise ValueError('ISO 감지 결과가 선택한 Windows 11/Linux x64 대상과 다르거나 지원되지 않습니다.')
+    supported=fields.get('IsInstallSupported','').lower()
+    return {'os_type_id':os_type,'version':fields.get('OSVersion',''),'flavor':fields.get('OSFlavor',''),
+            'languages':fields.get('OSLanguages',''),'unattended_supported':True if supported in ('on','true','yes','1') else False if supported in ('off','false','no','0') else None,
+            'images':sorted(images,key=lambda image:image['index'])}
+
 def build(request,uid):
     if not isinstance(request,dict):raise ValueError('VirtualBox 준비 설정 객체가 필요합니다.')
     if str(uuid.UUID(uid))!=uid:raise ValueError('VirtualBox 준비 ID 오류')
@@ -107,6 +142,8 @@ def build(request,uid):
     if target not in ('windows','linux'):raise ValueError('이 준비 경로는 Windows·Linux x64 VM용입니다. macOS는 Mac 실행 환경을 연결하세요.')
     if identity()['architecture'].lower() not in ('amd64','x86_64'):raise ValueError('현재 준비 경로는 x64 호스트만 지원합니다. ARM 장비는 별도 연결이 필요합니다.')
     iso=checked_iso(request.get('iso'))
+    expected=request.get('expected_sha256','')
+    if not isinstance(expected,str) or expected and not re.fullmatch(r'[0-9a-fA-F]{64}',expected):raise ValueError('공식 SHA-256은 64자리 16진수로 입력하세요.')
     preset_id=request.get('preset','auto')
     if preset_id not in ('auto','light','balanced','development'):raise ValueError('VM 프리셋 오류')
     selected=(suggestion['recommended'] or 'light') if preset_id=='auto' else preset_id
@@ -123,14 +160,15 @@ def build(request,uid):
               ['storageattach',uid,'--storagectl','SATA','--port','0','--device','0','--type','hdd','--medium',str(disk)],
               ['storageattach',uid,'--storagectl','SATA','--port','1','--device','0','--type','dvddrive','--medium',str(iso)]]
     if target=='windows':commands[1]+=['--tpm-type','2.0']
-    stat=iso.stat()
-    clean_request={'profile':profile,'iso':str(iso.relative_to(ROOT.resolve())),'preset':selected}
+    fingerprint,stamp=iso_fingerprint(iso)
+    if expected and fingerprint!=expected.lower():raise ValueError('ISO SHA-256이 입력한 공식 값과 다릅니다.')
+    clean_request={'profile':profile,'iso':str(iso.relative_to(ROOT.resolve())),'preset':selected,'expected_sha256':expected.lower()}
     return {'id':uid,'root':str(ROOT.resolve()),'host':identity(),'runtime_owner':runtime_owner(),'request':clean_request,'name':name,'target_os':target,'preset':preset,
-            'disk_mb':disk_mb,'commands':commands,'iso_stamp':[stat.st_size,stat.st_mtime_ns],
-            'recommendation_note':suggestion['note'],'scope':'프로젝트 VM 정의·등록·디스크·ISO 연결만 준비합니다. ISO 내용·부팅은 미검증이며 OS 설치·입력·화면 기록은 실행하지 않습니다.'}
+            'disk_mb':disk_mb,'commands':commands,'iso_stamp':stamp,'iso_sha256':fingerprint,'official_checksum_verified':bool(expected),'requested_preset':preset_id,
+            'recommendation_note':suggestion['note'],'scope':'프로젝트 VM 파일만 준비합니다. ISO 내용 지문·감지 OS를 확인하며 부팅·OS 설치·입력·화면 기록은 실행하지 않습니다.'}
 
 def inspect(plan):
-    binary=executable();issues=[];version=None
+    binary=executable();issues=[];version=None;detected=None
     if not binary:issues.append('기본 설치 경로에서 VBoxManage를 찾지 못했습니다. 설치 위치를 확인하거나 MOA_VBOXMANAGE 절대 경로를 지정하세요. 도구·드라이버를 자동 설치하지 않습니다.')
     else:
         try:
@@ -139,6 +177,7 @@ def inspect(plan):
             else:
                 registered=registered_vms(command(binary,['list','vms']))
                 if any(row['id']==plan['id'] or row['name'].startswith(project_prefix(plan['runtime_owner'])) for row in registered):issues.append('이 프로젝트의 VM 등록이 이미 있습니다. 기존 VM을 보존하고 준비를 중단합니다.')
+                detected=iso_metadata(command(binary,['unattended','detect','--iso='+str(checked_iso(plan['request']['iso'])),'--machine-readable']),plan['target_os'])
         except ValueError as error:issues.append(str(error))
     target=ROOT/'runtime/vbox'/plan['name']
     if target.exists() or target.is_symlink():issues.append('같은 VM 저장 폴더가 이미 있습니다. 덮어쓰지 않습니다.')
@@ -150,7 +189,7 @@ def inspect(plan):
         free=shutil.disk_usage(ROOT).free
         if free<(plan['disk_mb']+4096)*1024**2:issues.append('가상 디스크 용량과 호스트 여유 4GB를 위한 저장 공간이 부족합니다.')
     except OSError:issues.append('디스크 여유 공간을 확인하지 못했습니다.')
-    return {'binary':binary,'version':version,'issues':issues,'can_prepare':not issues}
+    return {'binary':binary,'version':version,'issues':issues,'can_prepare':not issues,'iso_detection':detected}
 
 def preview(store,vm,request):
     with vm.exclusive(),project_lock():
@@ -177,10 +216,11 @@ def prepare(store,vm,plan_id):
             if previous.get('id')==plan_id and previous.get('state')=='prepared':return previous
             raise ValueError('이전 준비가 완료되지 않았거나 다른 준비 기록이 있습니다. 자동 재실행하지 않습니다.')
         fresh=build(plan['request'],plan_id)
-        for key in ('root','host','runtime_owner','commands','iso_stamp'):
+        for key in ('root','host','runtime_owner','commands','iso_stamp','iso_sha256'):
             if fresh[key]!=plan.get(key):raise ValueError('호스트·ISO·추천 자원이 바뀌었습니다. 설치 준비 내용을 다시 확인하세요.')
         if vm.session():raise ValueError('기존 QEMU VM 기록이 있습니다. VM과 공유 사용권 상태를 확인하세요.')
         readiness=inspect(plan)
+        if readiness['iso_detection']!=plan.get('iso_detection'):raise ValueError('ISO 감지 결과가 바뀌었습니다. 준비 내용을 다시 확인하세요.')
         if not readiness['can_prepare'] or readiness['binary']!=plan.get('binary') or readiness['version']!=plan.get('version'):raise ValueError('VirtualBox 설치 상태나 저장 공간이 바뀌었습니다. 준비 내용을 다시 확인하세요.')
         record={'id':plan_id,'name':plan['name'],'root':plan['root'],'host':plan['host'],'runtime_owner':plan['runtime_owner'],'state':'preparing','completed_steps':0,'scope':plan['scope']}
         write_setting(store,'vbox_preparation',record)

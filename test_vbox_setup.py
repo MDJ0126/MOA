@@ -16,7 +16,7 @@ class VBoxPreparationTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent);self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.store=Store(self.root/'data');self.vm=VM(self.store)
         (self.root/'install.iso').write_bytes(b'fake ISO; never booted')
-        self.calls=[];self.version='7.2.8r12345';self.registered='';self.failure=None
+        self.calls=[];self.version='7.2.8r12345';self.registered='';self.failure=None;self.iso_type='Windows11_64';self.iso_support='on'
         stack=ExitStack();self.addCleanup(stack.close)
         stack.enter_context(patch.object(vbox,'ROOT',self.root))
         stack.enter_context(patch.object(vbox,'identity',return_value={'os':'windows','architecture':'AMD64'}))
@@ -28,6 +28,7 @@ class VBoxPreparationTests(unittest.TestCase):
     def command(self,binary,args):
         self.calls.append(list(args))
         if args[0]==self.failure:raise ValueError('simulated interruption')
+        if args[:2]==['unattended','detect']:return 'OSTypeId='+__import__('json').dumps(self.iso_type)+'\nOSVersion="test"\nIsInstallSupported='+self.iso_support+'\nImageIndex1="Test edition"'
         return self.version if args==['--version'] else self.registered if args==['list','vms'] else ''
     def preview(self):return vbox.preview(self.store,self.vm,self.request)
 
@@ -36,7 +37,7 @@ class VBoxPreparationTests(unittest.TestCase):
         self.assertEqual(plan['preset']['cpus'],2);self.assertGreaterEqual(plan['disk_mb'],65536)
         self.assertIn('--tpm-type',plan['commands'][1]);self.assertIn('2.0',plan['commands'][1])
         record=vbox.prepare(self.store,self.vm,plan['id']);self.assertEqual(record['state'],'prepared');self.assertEqual(record['completed_steps'],6)
-        self.assertEqual([args[0] for args in self.calls if args[0] not in ('--version','list')],['createvm','modifyvm','createmedium','storagectl','storageattach','storageattach'])
+        self.assertEqual([args[0] for args in self.calls if args[0] not in ('--version','list','unattended')],['createvm','modifyvm','createmedium','storagectl','storageattach','storageattach'])
         self.assertFalse(any(args[0] in ('startvm','controlvm','guestcontrol','unregistervm') for args in self.calls))
         calls=len(self.calls)
         with patch.object(vbox,'build',side_effect=AssertionError('completed replay must not rebuild')):
@@ -89,6 +90,7 @@ class VBoxPreparationTests(unittest.TestCase):
         with self.assertRaises(ValueError):vbox.prepare(self.store,self.vm,plan['id'])
 
     def test_linux_plan_uses_linux_graphics_without_tpm(self):
+        self.iso_type='Ubuntu_64'
         request={**self.request,'profile':{'target_os':'linux','location':'shared_vm'},'unknown_secret':'do not retain'}
         plan=vbox.preview(self.store,self.vm,request)
         self.assertEqual(plan['target_os'],'linux');self.assertIn('vmsvga',plan['commands'][1]);self.assertNotIn('--tpm-type',plan['commands'][1])
@@ -242,5 +244,38 @@ raise SystemExit(7)
         self.registered='unknown output';self.assertFalse(vbox.inspect(plan)['can_prepare'])
         self.registered='';folder=self.root/'runtime/vbox';folder.mkdir();(folder/'unknown.img').write_bytes(b'preserve me')
         self.assertFalse(vbox.inspect(plan)['can_prepare']);self.assertEqual((folder/'unknown.img').read_bytes(),b'preserve me')
+
+    def test_same_size_and_time_iso_replacement_is_blocked(self):
+        import os
+        plan=self.preview();path=self.root/'install.iso';before=path.stat();raw=path.read_bytes()
+        path.write_bytes(b'X'*len(raw));os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+        with self.assertRaises(ValueError):vbox.prepare(self.store,self.vm,plan['id'])
+        self.assertFalse(any(args[0]=='createvm' for args in self.calls))
+
+    def test_optional_official_checksum_matches_or_blocks_before_cli(self):
+        import hashlib
+        expected=hashlib.sha256((self.root/'install.iso').read_bytes()).hexdigest()
+        self.request['expected_sha256']=expected.upper();plan=self.preview()
+        self.assertTrue(plan['official_checksum_verified']);self.assertEqual(plan['iso_sha256'],expected)
+        self.calls.clear()
+        for bad in ('0'*64,'not-a-hash',True):
+            with self.assertRaises(ValueError):vbox.preview(self.store,self.vm,{**self.request,'expected_sha256':bad})
+        self.assertEqual(self.calls,[])
+
+    def test_detected_os_architecture_and_changed_metadata_block_prepare(self):
+        for os_type in ('Ubuntu_64','Windows11','Windows11_arm64','Solaris_64'):
+            self.iso_type=os_type;self.assertFalse(self.preview()['can_prepare'])
+        self.iso_type='Windows11_64';plan=self.preview();self.iso_support='off'
+        with self.assertRaises(ValueError):vbox.prepare(self.store,self.vm,plan['id'])
+        self.assertFalse(any(args[0]=='createvm' for args in self.calls))
+        self.iso_type='Ubuntu_64';self.request['profile']['target_os']='linux'
+        plan=self.preview();self.assertTrue(plan['can_prepare']);self.assertFalse(plan['iso_detection']['unattended_supported'])
+
+    def test_detection_parser_preserves_editions_and_rejects_ambiguous_output(self):
+        raw='OSTypeId="Windows11_64"\nIsInstallSupported=on\nImageIndex2="Pro"\nImageIndex1="Home"'
+        result=vbox.iso_metadata(raw,'windows');self.assertEqual([image['index'] for image in result['images']],[1,2])
+        for bad in (raw+'\nOSTypeId="Windows11_64"','unknown output','OSTypeId="Solaris_64"'):
+            with self.assertRaises(ValueError):vbox.iso_metadata(bad,'windows')
+        self.assertIsNone(vbox.iso_metadata('OSTypeId="Windows11_64"','windows')['unattended_supported'])
 
 if __name__=='__main__':unittest.main()
