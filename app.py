@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import shutil
 import threading
 import time
@@ -333,17 +334,30 @@ class LocalFiles:
             return '\n'.join(str(p.relative_to(self.folder)) for p in self.folder.rglob('*') if p.is_file())[:20000]
         p = self.path(action.get('path', ''))
         if op == 'read':
-            if p.stat().st_size > 200000:
+            initial=p.lstat()
+            valid=lambda info:stat.S_ISREG(info.st_mode) and info.st_nlink==1 and not getattr(info,'st_file_attributes',0)&0x400
+            if not valid(initial):raise ValueError('읽기는 링크가 아닌 일반 파일만 허용됩니다.')
+            if initial.st_size > 200000:
                 raise ValueError('읽기 한도 200KB를 초과했습니다.')
-            return p.read_text(encoding='utf-8')
+            with p.open('rb') as stream:
+                opened=os.fstat(stream.fileno());current=p.lstat()
+                identity=lambda info:(info.st_dev,info.st_ino)
+                if not valid(opened) or not valid(current) or identity(initial)!=identity(opened) or identity(opened)!=identity(current):raise ValueError('읽기 중 파일이 변경되었습니다.')
+                content=stream.read(200001)
+            if len(content)>200000:raise ValueError('읽기 한도 200KB를 초과했습니다.')
+            return content.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
         if op == 'write' and writable:
             content = action.get('content', '')
             if not isinstance(content, str) or len(content.encode()) > 200000:
                 raise ValueError('쓰기 한도 200KB를 초과했습니다.')
             p.parent.mkdir(parents=True, exist_ok=True)
-            temp=p.with_name(p.name+'.agent-tmp')
-            temp.write_text(content, encoding='utf-8')
-            temp.replace(p)
+            temp=p.with_name('.agent-'+uuid.uuid4().hex+'.tmp');created=False
+            try:
+                with temp.open('x',encoding='utf-8',newline='\n') as stream:
+                    created=True;stream.write(content)
+                temp.replace(p)
+            finally:
+                if created:temp.unlink(missing_ok=True)
             return f'저장됨: {p.relative_to(self.folder)}'
         raise ValueError('허용되지 않은 도구입니다.')
 
