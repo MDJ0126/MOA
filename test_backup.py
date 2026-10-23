@@ -64,6 +64,27 @@ class BackupTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):restore(self.archive,destination)
         self.assertFalse(destination.exists());self.assertEqual(read_setting(self.store,'vbox_plan',{})['id'],'old')
 
+    def test_binary_preparation_history_survives_preview_restore_and_rebackup(self):
+        records={'vbox_plan':b'\xff\x00legacy','vbox_preparation':None,'vbox_installation':'42'}
+        with self.store.connect() as c:
+            for key,value in records.items():c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,value))
+        backup(self.source,self.archive);original=self.archive.read_bytes()
+        self.assertFalse(inspect_backup(self.archive)['restored'])
+        self.assertEqual(self.archive.read_bytes(),original)
+        destination=self.root/'restored';restore(self.archive,destination)
+        restored=Store(destination)
+        with restored.connect() as c:
+            snapshot=json.loads(c.execute('SELECT snapshot FROM vbox_restore_archive').fetchone()[0])
+            self.assertEqual(bytes.fromhex(snapshot['vbox_plan']['hex']),records['vbox_plan'])
+            self.assertEqual(snapshot['vbox_plan']['sqlite_type'],'blob')
+            self.assertIsNone(snapshot['vbox_preparation']);self.assertEqual(snapshot['vbox_installation'],'42')
+            self.assertEqual(c.execute("SELECT count(*) FROM settings WHERE key LIKE 'vbox_%'").fetchone()[0],0)
+        with self.store.connect() as c:self.assertEqual(dict(c.execute("SELECT key,value FROM settings WHERE key LIKE 'vbox_%'")),records)
+        second=self.root/'second.zip';backup(destination,second);twice=self.root/'twice';restore(second,twice)
+        with Store(twice).connect() as c:
+            rows=c.execute('SELECT snapshot FROM vbox_restore_archive').fetchall()
+            self.assertEqual(len(rows),1);self.assertEqual(json.loads(rows[0][0]),snapshot)
+
     def test_preview_validates_without_replacing_source(self):
         backup(self.source, self.archive)
         original=self.archive.read_bytes()

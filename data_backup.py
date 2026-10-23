@@ -191,8 +191,11 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             # Preserve exact old records for review, but never adopt them after restore.
             vbox_records=dict(c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')"))
             if vbox_records:
+                # SQLite settings may contain legacy BLOBs. Preserve their exact
+                # bytes without treating them as active installation receipts.
+                snapshot={key:({'sqlite_type':'blob','hex':value.hex()} if isinstance(value,bytes) else value) for key,value in vbox_records.items()}
                 c.execute('CREATE TABLE IF NOT EXISTS vbox_restore_archive(id INTEGER PRIMARY KEY,restored REAL NOT NULL,snapshot TEXT NOT NULL)')
-                c.execute('INSERT INTO vbox_restore_archive(restored,snapshot) VALUES(?,?)',(time.time(),json.dumps(vbox_records,ensure_ascii=False)))
+                c.execute('INSERT INTO vbox_restore_archive(restored,snapshot) VALUES(?,?)',(time.time(),json.dumps(snapshot,ensure_ascii=False)))
                 c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")
             tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             owner=c.execute("SELECT value FROM settings WHERE key='vm_owner'").fetchone()
