@@ -63,8 +63,11 @@ def checked_instruction_state(task,pipeline):
 
 
 def checked_plan(task):
-    plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
-    if not isinstance(plan,dict):raise ValueError('실행 계획 객체 오류')
+    try:
+        plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
+        if not isinstance(plan,dict):raise ValueError('실행 계획 객체 오류')
+        json.dumps(plan,allow_nan=False)
+    except (ValueError,TypeError,OverflowError,RecursionError) as error:raise ValueError('실행 계획 형식 오류') from error
     clean=validate_team({'agents':plan.get('agents'),'pipeline':plan.get('pipeline')})
     pipeline=clean['pipeline'];assignment=plan.get('assignment')
     if not isinstance(assignment,dict) or task['mode'] not in ('demo','llama','ollama') or type(task['stage']) is not int or not 0<=task['stage']<len(pipeline):raise ValueError('실행 단계 오류')

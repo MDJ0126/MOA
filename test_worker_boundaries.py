@@ -107,6 +107,24 @@ class WorkerBoundaryTests(unittest.TestCase):
         with self.store.connect() as c:c.execute("UPDATE tasks SET execution_plan='' WHERE id=?",(tid,))
         self.worker.tick();self.assertEqual(self.store.snapshot()['tasks'][0]['status'],'completed')
 
+    def test_nonfinite_plan_metadata_is_held_before_workspace_or_backend(self):
+        for index,number in enumerate(('NaN','Infinity','-Infinity','1e309')):
+            with self.subTest(number=number):
+                self.store=Store(Path(self.temp.name)/str(index));self.worker=Worker(self.store)
+                tid=self.store.add('invalid numeric metadata','demo');next_id=self.store.add('next healthy task','demo')
+                with self.store.connect() as c:
+                    plan=json.loads(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0])
+                    plan['legacy_metadata']={'limit':'NUMERIC_MARKER'}
+                    raw=json.dumps(plan).replace('"NUMERIC_MARKER"',number)
+                    c.execute('UPDATE tasks SET execution_plan=? WHERE id=?',(raw,tid))
+                with patch.object(Demo,'run',side_effect=AssertionError('invalid plan reached backend')) as backend:self.worker.tick()
+                backend.assert_not_called()
+                self.assertEqual(next(task for task in self.store.snapshot()['tasks'] if task['id']==tid)['status'],'interrupted')
+                self.assertFalse((self.store.root/'tasks'/tid/'workspace').exists())
+                with self.store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
+                with self.assertRaisesRegex(ValueError,'실행 계획'):self.store.control('retry',tid)
+                self.worker.tick();self.assertEqual(next(task for task in self.store.snapshot()['tasks'] if task['id']==next_id)['status'],'completed')
+
     def test_workspace_preparation_failure_is_terminal_and_next_task_runs(self):
         tid=self.store.add('workspace failure','demo');next_id=self.store.add('next workspace','demo')
         with patch('app.LocalFiles',side_effect=PermissionError('workspace unavailable')):self.worker.tick()
