@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testOpenTask=openTask;window.testLoadArtifacts=loadArtifacts;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -103,6 +103,24 @@ async function main(){
  w.fetch=async(path,options)=>path.startsWith('/api/artifacts?')?new Response(JSON.stringify({error:'결과 파일 조회 실패'}),{status:503,headers:{'Content-Type':'application/json'}}):artifactFetch(path,options);
  await w.testRefresh();assert.ok(d.querySelector('[data-action="refresh-artifacts"]'));
  w.fetch=artifactFetch;click('[data-action="refresh-artifacts"]');await until(()=>d.querySelector('a[href*="file=artifacts.zip"]'),'artifact lookup retry');
+ {
+ const viewFetch=w.fetch,tid=state.tasks[0].id;let releaseOld,artifactCalls=0;
+ w.fetch=(path,options)=>{if(path.startsWith('/api/artifacts?')){if(artifactCalls++===0)return new Promise(resolve=>{releaseOld=resolve});return Promise.resolve(new Response(JSON.stringify({task_id:tid,files:[{name:'artifacts.zip'}]})))}return viewFetch(path,options)};
+ const pending=w.testLoadArtifacts(tid);await until(()=>releaseOld,'older artifact listing pending');
+ click('[data-action="close-modal"]');await w.testOpenTask(tid);
+ assert.ok(d.querySelector('a[href*="file=artifacts.zip"]'));
+ releaseOld(new Response(JSON.stringify({task_id:tid,files:[]})));await pending;
+ assert.ok(d.querySelector('a[href*="file=artifacts.zip"]'),'old artifact listing must not overwrite reopened results');w.fetch=viewFetch;
+ const vmState=structuredClone(state),task=vmState.tasks.find(task=>task.id===tid),taskPlan=JSON.parse(task.execution_plan);taskPlan.environment={kind:'vm'};task.execution_plan=JSON.stringify(taskPlan);
+ let releaseVM,vmCalls=0;
+ w.fetch=(path,options)=>{if(path==='/api/state')return Promise.resolve(new Response(JSON.stringify(vmState)));if(path.startsWith('/api/vm/evidence?')){if(vmCalls++===0)return new Promise(resolve=>{releaseVM=resolve});return Promise.resolve(new Response(JSON.stringify({files:['vm/latest-view.png']})))}return viewFetch(path,options)};
+ const olderRefresh=w.testRefresh();await until(()=>releaseVM,'older saved VM evidence pending');
+ click('[data-action="close-modal"]');await w.testOpenTask(tid);
+ assert.ok(d.querySelector('#vmEvidence').textContent.includes('latest-view.png'));
+ releaseVM(new Response(JSON.stringify({files:['vm/obsolete-view.png']})));await olderRefresh;
+ assert.ok(d.querySelector('#vmEvidence').textContent.includes('latest-view.png'),'old evidence must not overwrite reopened VM records');
+ assert.ok(!d.querySelector('#vmEvidence').textContent.includes('obsolete-view.png'));w.fetch=viewFetch;await w.testRefresh();
+ }
  click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
  const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
  click('[data-action="close-modal"]');
