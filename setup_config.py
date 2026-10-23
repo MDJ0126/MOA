@@ -35,11 +35,11 @@ def team_recovery_token(raw):
     return digest.hexdigest()
 
 def decode_team(raw):
-    value=json.loads(raw);validate_team(value)
+    value=json.loads(raw);clean=validate_team(value)
     revision=value.get('updated',0)
     if type(revision) not in (int,float) or not math.isfinite(revision) or revision<0:raise ValueError('팀 설정 버전 오류')
     if 'configured' in value and type(value['configured']) is not bool:raise ValueError('팀 설정 상태 오류')
-    return value
+    return {**clean,'configured':value.get('configured',False),'updated':revision}
 
 def check_revision(current,value):
     expected=value.get('expected_updated')
@@ -102,9 +102,12 @@ def validate_team(value):
         if len(instructions)>2000:raise ValueError('추가 지침은 2,000자 이내로 입력하세요.')
         ids.add(aid);clean.append({'id':aid,'name':name,'capabilities':list(dict.fromkeys(roles)),'instructions':instructions})
     if any(not any(role in a['capabilities'] for a in clean) for role in pipeline):raise ValueError('각 실행 단계에 담당자가 한 명 이상 필요합니다.')
-    revisions=int(value.get('max_revisions',2))
-    if not 0<=revisions<=5:raise ValueError('수정 횟수는 0~5회로 설정하세요.')
-    return {'configured':True,'preset':value.get('preset',value.get('id','custom')),'agents':clean,'pipeline':pipeline,'max_revisions':revisions,'updated':time.time()}
+    revisions=value.get('max_revisions',2)
+    if isinstance(revisions,str) and re.fullmatch('[0-5]',revisions):revisions=int(revisions)
+    if type(revisions) is not int or not 0<=revisions<=5:raise ValueError('수정 횟수는 0~5회 정수로 설정하세요.')
+    preset=value.get('preset',value.get('id','custom'))
+    if not isinstance(preset,str) or not 1<=len(preset)<=80:raise ValueError('팀 프리셋 이름을 확인하세요.')
+    return {'configured':True,'preset':preset,'agents':clean,'pipeline':pipeline,'max_revisions':revisions,'updated':time.time()}
 
 def save_team(store,value):
     clean=validate_team(value)

@@ -18,6 +18,25 @@ class _TeamRecoveryFixture(unittest.TestCase):
         with self.store.connect() as connection:return connection.execute("SELECT value FROM settings WHERE key='workspace'").fetchone()[0]
 
 class TeamRecoveryTests(_TeamRecoveryFixture):
+    def test_read_returns_validated_fields_without_private_or_nonfinite_extras(self):
+        value={**PRESETS[0],'max_revisions':'2','updated':123,'private_corrupt_note':'do not expose','unused':float('nan')}
+        raw=json.dumps(value);self.corrupt(raw);team=team_settings(self.store)
+        self.assertNotIn('private_corrupt_note',team);self.assertNotIn('unused',team)
+        self.assertEqual(team['max_revisions'],2);self.assertEqual(team['updated'],123)
+        json.dumps(team,allow_nan=False);self.assertEqual(self.raw(),raw)
+
+    def test_invalid_preset_and_revision_are_recoverable_not_silently_coerced(self):
+        for changes in ({'preset':float('nan')},{'preset':[]},{'max_revisions':True},{'max_revisions':2.5}):
+            with self.subTest(changes=changes):
+                self.corrupt(json.dumps({**PRESETS[0],**changes}));self.assertTrue(team_settings(self.store)['recovery_required'])
+
+    def test_invalid_control_values_do_not_overwrite_valid_team(self):
+        original=self.raw()
+        for changes in ({'preset':float('nan')},{'preset':{}},{'max_revisions':False},{'max_revisions':1.5}):
+            with self.subTest(changes=changes):
+                with self.assertRaises(ValueError):save_team(self.store,{**PRESETS[0],**changes})
+                self.assertEqual(self.raw(),original)
+
     def test_corruption_is_visible_without_replacing_original(self):
         for raw in ('{','[]','null','{}',b'\xff\x00',json.dumps({**PRESETS[0],'updated':'broken'})):
             with self.subTest(raw=repr(raw)):
@@ -80,7 +99,7 @@ class TeamRecoveryHttpTests(_TeamRecoveryFixture):
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         def request(path,payload=None):
             message=urllib.request.Request(f'http://127.0.0.1:{port}'+path,None if payload is None else json.dumps(payload).encode(),{'Content-Type':'application/json','X-Local-Agent':'1'})
-            with urllib.request.urlopen(message,timeout=3) as response:return json.load(response)
+            with urllib.request.urlopen(message,timeout=3) as response:return json.load(response,parse_constant=lambda value:self.fail('non-finite JSON response: '+value))
         with (Path(self.temp.name)/'server.log').open('wb') as log:
             process=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(self.store.root),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             try:
@@ -102,6 +121,12 @@ class TeamRecoveryHttpTests(_TeamRecoveryFixture):
                     new=connection.execute('SELECT execution_plan FROM tasks WHERE id=?',(created['id'],)).fetchone()[0]
                 self.assertEqual(json.loads(old)['agents'][0]['id'],'maker');self.assertEqual(json.loads(new)['agents'][0]['id'],'builder')
                 self.assertEqual(request('/api/health')['app']['pid'],process.pid)
+                raw=json.dumps({**saved,'private_corrupt_note':'do not expose','unused':float('nan')});self.corrupt(raw)
+                exposed=request('/api/setup')['team']
+                self.assertNotIn('private_corrupt_note',exposed);self.assertNotIn('unused',exposed);self.assertEqual(exposed['updated'],saved['updated'])
+                self.assertEqual(self.raw(),raw)
+                with self.assertRaises(urllib.error.HTTPError) as error:request('/api/setup/team',{**saved,'preset':float('nan'),'expected_updated':saved['updated']})
+                self.assertEqual(error.exception.code,400);error.exception.close();self.assertEqual(self.raw(),raw)
             finally:
                 if process.poll() is None:
                     try:request_stop(project,port,expected_pid=process.pid);process.wait(timeout=10)
