@@ -5,12 +5,14 @@ const base=process.argv[2],sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function main(){
  const bad=await fetch(base+'/api/vbox/plan',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({profile:{location:'shared_vm',target_os:'windows'},iso:'../outside.iso'})});assert.equal(bad.status,400);
  const realStatus=await(await fetch(base+'/api/vbox/setup')).json();assert.equal(realStatus.preparation,null);
+ const absent=await fetch(base+'/api/vbox/recovery',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({action:'inspect'})});assert.equal(absent.status,200);assert.equal((await absent.json()).can_clear,false);
  const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
- let prepareCount=0,late=null,delay=false,record=null;
+ let prepareCount=0,late=null,delay=false,record=null,recoveryAllowed=false,clearCount=0;
  w.fetch=(path,options)=>{
   if(path==='/api/vbox/plan'){const result={id:'fake-plan',target_os:'windows',preset:{memory_mb:4096,cpus:2},disk_mb:131072,recommendation_note:'현재 여유 자원 확인 필요',issues:[],can_prepare:true,commands:[['createvm','<img src=x onerror=alert(1)>']],scope:'파일 준비만'};if(delay)return new Promise(resolve=>{late=()=>resolve(new Response(JSON.stringify(result)))});return Promise.resolve(new Response(JSON.stringify(result)))}
   if(path==='/api/vbox/prepare'){prepareCount++;assert.equal(JSON.parse(options.body).plan_id,'fake-plan');record={state:'prepared',completed_steps:6,scope:'부팅하지 않음'};return Promise.resolve(new Response(JSON.stringify(record)))}
+  if(path==='/api/vbox/recovery'){const payload=JSON.parse(options.body);if(payload.action==='clear'){clearCount++;assert.equal(payload.record_id,'fake-plan');assert.ok(payload.request_key.length>=8);record=null;return Promise.resolve(new Response(JSON.stringify({cleared:true,record_id:'fake-plan'})))}return Promise.resolve(new Response(JSON.stringify({record_id:'fake-plan',name:'fake-vm',can_clear:recoveryAllowed,reason:recoveryAllowed?'VM 등록과 폴더가 없습니다.':'VM 등록이 남아 있습니다.'})))}
   if(path==='/api/vbox/setup')return Promise.resolve(new Response(JSON.stringify({preparation:record,plan:null})));
   return fetch(base+path,options);
  };
@@ -29,6 +31,8 @@ async function main(){
   click('plan-vbox');await until(()=>!d.querySelector('[data-action="prepare-vbox"]').hidden,'new plan');click('prepare-vbox');
   await until(()=>d.querySelector('#vboxSummary').textContent.includes('준비 완료 기록'),'fake preparation receipt');assert.equal(prepareCount,1);assert.equal(d.querySelector('[data-action="prepare-vbox"]').hidden,true);
   record={state:'preparing',completed_steps:2};click('status-vbox');await until(()=>d.querySelector('#vboxSummary').textContent.includes('생존과 완료 여부는 미확인'),'no false live process claim');
+  click('inspect-vbox-recovery');await until(()=>d.querySelector('#vboxRecoverySummary').textContent.includes('등록이 남아'),'remaining VM blocks cleanup');assert.equal(d.querySelector('[data-action="clear-vbox-recovery"]').hidden,true);
+  recoveryAllowed=true;click('inspect-vbox-recovery');await until(()=>!d.querySelector('[data-action="clear-vbox-recovery"]').hidden,'absence permits metadata cleanup');click('clear-vbox-recovery');await until(()=>d.querySelector('#vboxRecoverySummary').textContent.includes('준비 기록을 정리'),'metadata clear receipt');assert.equal(clearCount,1);assert.equal(d.querySelector('#vboxIso').value,'runtime/install.iso');
   delay=true;click('plan-vbox');await until(()=>late,'pending plan');input('vboxIso','runtime/new.iso','input');late();
   await until(()=>!d.querySelector('[data-action="plan-vbox"]').disabled,'late response drained');assert.equal(d.querySelector('[data-action="prepare-vbox"]').hidden,true);assert.equal(d.querySelector('#vboxIso').value,'runtime/new.iso');
   console.log('PASS: VirtualBox collapsed preparation review, safe command text, stale-plan invalidation, fake prepare receipt, unknown process status; no actual VirtualBox commands');

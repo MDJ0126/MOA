@@ -755,7 +755,7 @@ def serve(root, port, model, url,demo_only=False):
                     raise ValueError('요청 크기 제한')
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data,dict):raise ValueError('JSON 객체가 필요합니다.')
-                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input','/api/vbox/plan','/api/vbox/prepare'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
+                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input','/api/vbox/plan','/api/vbox/prepare','/api/vbox/recovery'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
                 if self.path == '/api/tasks':
                     if demo_only and (data.get('mode',default_mode)!='demo' or data.get('environment','local')!='local'):raise ValueError('데모 전용 실행은 로컬 데모 작업만 접수합니다.')
                     self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'),expected_profile_updated=data.get('expected_profile_updated'))})
@@ -776,6 +776,11 @@ def serve(root, port, model, url,demo_only=False):
                     if folder.resolve()!=ROOT/'backups' or not archive.is_file() or archive.is_symlink() or archive.resolve().parent!=folder.resolve():raise ValueError('백업 파일을 찾을 수 없습니다.')
                     try:self.send(200,inspect_backup(archive))
                     except (zipfile.BadZipFile,sqlite3.Error,RuntimeError,NotImplementedError):raise ValueError('백업 ZIP 또는 데이터베이스가 손상되었거나 지원하지 않는 형식입니다.') from None
+                elif self.path=='/api/vbox/recovery':
+                    if data.get('action')=='inspect':result=vbox_setup.recovery_check(store,worker.vm)
+                    elif data.get('action')=='clear':result=vbox_setup.clear_preparation(store,worker.vm,data.get('record_id'),data.get('request_key'))
+                    else:raise ValueError('준비 복구는 inspect 또는 clear입니다.')
+                    self.send(200,result)
                 elif self.path=='/api/vbox/plan':
                     self.send(200,vbox_setup.preview(store,worker.vm,data))
                 elif self.path=='/api/vbox/prepare':

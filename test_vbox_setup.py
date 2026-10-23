@@ -124,4 +124,67 @@ class VBoxPreparationTests(unittest.TestCase):
             with patch.dict(vbox.os.environ,{'MOA_VBOXMANAGE':value}):
                 with self.assertRaises(ValueError):ORIGINAL_EXECUTABLE()
 
+    def test_recovery_clears_only_absent_vm_records_and_replays_receipt(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id']);self.calls.clear()
+        check=vbox.recovery_check(self.store,self.vm);self.assertTrue(check['can_clear'])
+        result=vbox.clear_preparation(self.store,self.vm,plan['id'],'recovery-request-01');self.assertTrue(result['cleared'])
+        self.assertEqual(read_setting(self.store,'vbox_preparation',{}),{});self.assertEqual(read_setting(self.store,'vbox_plan',{}),{})
+        self.assertTrue((self.root/'runtime/vbox-owner.id').exists())
+        with self.store.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM vbox_recovery_audit').fetchone()[0],1)
+        next_plan=self.preview();vbox.prepare(self.store,self.vm,next_plan['id']);calls=len(self.calls)
+        self.assertTrue(vbox.clear_preparation(self.store,self.vm,plan['id'],'recovery-request-01')['replayed'])
+        self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],next_plan['id'])
+        self.assertEqual(len(self.calls),calls)
+
+    def test_recovery_registered_folder_and_unknown_list_preserve_records(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id']);before=read_setting(self.store,'vbox_preparation',{})
+        for listing in ('"owned" {'+plan['id']+'}','unrecognized response'):
+            self.registered=listing;self.assertFalse(vbox.recovery_check(self.store,self.vm)['can_clear'])
+            with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'recovery-blocked-01')
+        self.registered='';folder=self.root/'runtime/vbox'/plan['name'];folder.mkdir(parents=True)
+        self.assertFalse(vbox.recovery_check(self.store,self.vm)['can_clear']);folder.rmdir()
+        self.assertEqual(read_setting(self.store,'vbox_preparation',{}),before)
+        with patch.object(vbox,'executable',return_value=None):self.assertFalse(vbox.recovery_check(self.store,self.vm)['can_clear'])
+        with self.vm.exclusive():
+            with self.assertRaises(BusyVM):vbox.recovery_check(self.store,self.vm)
+
+    def test_restored_or_legacy_record_without_runtime_owner_never_adopts(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id'])
+        marker=self.root/'runtime/vbox-owner.id';marker.unlink()
+        check=vbox.recovery_check(self.store,self.vm);self.assertFalse(check['can_clear']);self.assertIn('소유 표식',check['reason'])
+        self.assertFalse(marker.exists())
+        with self.assertRaises(ValueError):vbox.prepare(self.store,self.vm,plan['id'])
+        with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'restore-recovery-01')
+
+    def test_recovery_audit_failure_rolls_back_metadata_clear(self):
+        import sqlite3
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id'])
+        with self.store.connect() as c:
+            c.execute('CREATE TABLE vbox_recovery_audit(request_key TEXT PRIMARY KEY,record_id TEXT NOT NULL,snapshot TEXT NOT NULL,created REAL NOT NULL)')
+            c.execute("CREATE TRIGGER reject_vbox_audit BEFORE INSERT ON vbox_recovery_audit BEGIN SELECT RAISE(ABORT,'simulated failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):vbox.clear_preparation(self.store,self.vm,plan['id'],'audit-recovery-01')
+        self.assertEqual(read_setting(self.store,'vbox_plan',{})['id'],plan['id']);self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],plan['id'])
+
+    def test_recovery_detects_changed_record_and_readonly_queries_only(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id']);self.calls.clear();original=self.command
+        def racing(binary,args):
+            result=original(binary,args)
+            if args==['list','vms']:
+                changed=read_setting(self.store,'vbox_plan',{});changed['created']+=1;write_setting(self.store,'vbox_plan',changed)
+            return result
+        with patch.object(vbox,'command',side_effect=racing):
+            with self.assertRaisesRegex(ValueError,'기록이 바뀌었'):vbox.clear_preparation(self.store,self.vm,plan['id'],'racing-recovery-01')
+        self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],plan['id'])
+        self.assertTrue(all(args[0] in ('--version','list') for args in self.calls))
+
+    def test_recovery_permission_failure_and_bad_id_preserve_records(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id']);target=self.root/'runtime/vbox'/plan['name'];original=Path.lstat
+        def denied(path,*args,**kwargs):
+            if path==target:raise PermissionError('denied')
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'lstat',denied):self.assertFalse(vbox.recovery_check(self.store,self.vm)['can_clear'])
+        with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,'wrong-id','bad-id-recovery')
+        with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'short')
+        self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],plan['id'])
+
 if __name__=='__main__':unittest.main()

@@ -13,6 +13,18 @@ from setup_config import read_setting,write_setting
 
 ROOT=Path(__file__).resolve().parent
 
+def runtime_owner(create=False):
+    folder=ROOT/'runtime';marker=folder/'vbox-owner.id'
+    if folder.resolve()!=ROOT.resolve()/'runtime':raise ValueError('runtime 저장 경로를 확인하세요.')
+    if not marker.exists() and not marker.is_symlink():
+        if not create:return None
+        folder.mkdir(exist_ok=True)
+        with marker.open('x',encoding='ascii') as stream:stream.write(str(uuid.uuid4()))
+    if marker.is_symlink() or not marker.is_file() or marker.stat().st_nlink!=1:raise ValueError('runtime 소유 표식 형식을 확인하세요.')
+    with marker.open(encoding='ascii') as stream:value=stream.read(65)
+    if str(uuid.UUID(value))!=value:raise ValueError('runtime 소유 표식이 손상되었습니다.')
+    return value
+
 def executable():
     override=os.environ.get('MOA_VBOXMANAGE')
     if override:
@@ -64,7 +76,7 @@ def build(request,uid):
     if target=='windows':commands[1]+=['--tpm-type','2.0']
     stat=iso.stat()
     clean_request={'profile':profile,'iso':str(iso.relative_to(ROOT.resolve())),'preset':selected}
-    return {'id':uid,'root':str(ROOT.resolve()),'host':identity(),'request':clean_request,'name':name,'target_os':target,'preset':preset,
+    return {'id':uid,'root':str(ROOT.resolve()),'host':identity(),'runtime_owner':runtime_owner(),'request':clean_request,'name':name,'target_os':target,'preset':preset,
             'disk_mb':disk_mb,'commands':commands,'iso_stamp':[stat.st_size,stat.st_mtime_ns],
             'recommendation_note':suggestion['note'],'scope':'프로젝트 VM 정의·등록·디스크·ISO 연결만 준비합니다. ISO 내용·부팅은 미검증이며 OS 설치·입력·화면 기록은 실행하지 않습니다.'}
 
@@ -92,6 +104,7 @@ def preview(store,vm,request):
         previous=read_setting(store,'vbox_preparation',{})
         if not isinstance(previous,dict):raise ValueError('VirtualBox 준비 기록 형식을 확인하세요.')
         if previous:raise ValueError('기존 VirtualBox 준비 기록이 있습니다. 파일과 기록을 확인한 뒤 별도 복구가 필요합니다.')
+        runtime_owner(create=True)
         plan=build(request,str(uuid.uuid4()));plan.update(inspect(plan));plan['created']=time.time()
         write_setting(store,'vbox_plan',plan)
         return plan
@@ -101,19 +114,22 @@ def prepare(store,vm,plan_id):
         plan=read_setting(store,'vbox_plan',{})
         if not isinstance(plan,dict):raise ValueError('VirtualBox 준비 계획 형식을 확인하세요.')
         if not isinstance(plan_id,str) or plan_id!=plan.get('id'):raise ValueError('설치 준비 내용을 다시 확인하세요.')
+        if not plan.get('runtime_owner') or runtime_owner()!=plan['runtime_owner']:raise ValueError('원래 runtime 소유 표식을 확인하지 못했습니다. 준비 내용을 다시 확인하세요.')
         previous=read_setting(store,'vbox_preparation',{})
         if not isinstance(previous,dict):raise ValueError('VirtualBox 준비 기록 형식을 확인하세요.')
         if previous:
             if previous.get('root')!=str(ROOT.resolve()) or previous.get('host')!=identity():raise ValueError('다른 프로젝트·호스트의 준비 기록입니다. 기존 VM을 자동 연결하지 않습니다.')
+            owner=runtime_owner()
+            if owner is None or previous.get('runtime_owner')!=owner or plan.get('runtime_owner')!=owner:raise ValueError('원래 runtime 소유 표식이 없습니다. 준비 기록을 자동 적용하지 않습니다.')
             if previous.get('id')==plan_id and previous.get('state')=='prepared':return previous
             raise ValueError('이전 준비가 완료되지 않았거나 다른 준비 기록이 있습니다. 자동 재실행하지 않습니다.')
         fresh=build(plan['request'],plan_id)
-        for key in ('root','host','commands','iso_stamp'):
+        for key in ('root','host','runtime_owner','commands','iso_stamp'):
             if fresh[key]!=plan.get(key):raise ValueError('호스트·ISO·추천 자원이 바뀌었습니다. 설치 준비 내용을 다시 확인하세요.')
         if vm.session():raise ValueError('기존 QEMU VM 기록이 있습니다. VM과 공유 사용권 상태를 확인하세요.')
         readiness=inspect(plan)
         if not readiness['can_prepare'] or readiness['binary']!=plan.get('binary') or readiness['version']!=plan.get('version'):raise ValueError('VirtualBox 설치 상태나 저장 공간이 바뀌었습니다. 준비 내용을 다시 확인하세요.')
-        record={'id':plan_id,'name':plan['name'],'root':plan['root'],'host':plan['host'],'state':'preparing','completed_steps':0,'scope':plan['scope']}
+        record={'id':plan_id,'name':plan['name'],'root':plan['root'],'host':plan['host'],'runtime_owner':plan['runtime_owner'],'state':'preparing','completed_steps':0,'scope':plan['scope']}
         write_setting(store,'vbox_preparation',record)
         try:
             for index,args in enumerate(plan['commands']):
@@ -126,3 +142,73 @@ def prepare(store,vm,plan_id):
             except (OSError,RuntimeError):pass
             raise
         return record
+
+def _recovery_state(store):
+    with store.connect() as c:
+        rows={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")}
+    return rows
+
+def _check_recovery(rows):
+    result={'record_id':None,'name':None,'can_clear':False,'registered':None,'folder_present':None,
+            'scope':'준비 메타데이터만 정리합니다. VM 등록·파일·전원은 변경하지 않습니다.'}
+    try:
+        record=json.loads(rows.get('vbox_preparation','{}'));plan=json.loads(rows.get('vbox_plan','{}'))
+        if not record:return {**result,'reason':'정리할 준비 기록이 없습니다.'}
+        if not isinstance(record,dict) or not isinstance(plan,dict):raise ValueError('준비 기록 형식 오류')
+        uid=record.get('id');valid=str(uuid.UUID(uid))
+        if uid!=valid:raise ValueError('준비 ID 오류')
+        name='moa-shared-'+uid[:8];result.update(record_id=uid,name=name)
+        owner=runtime_owner()
+        if owner is None:raise ValueError('원래 runtime 소유 표식이 없습니다. 복원 기록을 자동 정리하지 않습니다.')
+        for value in (record,plan):
+            if value.get('id')!=uid or value.get('name')!=name or value.get('root')!=str(ROOT.resolve()) or value.get('host')!=identity():raise ValueError('다른 프로젝트·호스트이거나 손상된 준비 기록입니다. 자동 정리하지 않습니다.')
+            if value.get('runtime_owner')!=owner:raise ValueError('runtime 소유 표식이 일치하지 않습니다. 자동 정리하지 않습니다.')
+        if record.get('state') not in ('preparing','prepared','interrupted'):raise ValueError('준비 상태를 확인하지 못했습니다.')
+        folder=ROOT/'runtime/vbox'
+        if folder.resolve()!=ROOT.resolve()/'runtime/vbox':raise ValueError('VM 저장 폴더가 프로젝트 밖을 가리킵니다.')
+        target=folder/name
+        try:target.lstat();present=True
+        except FileNotFoundError:present=False
+        result['folder_present']=present
+        binary=executable()
+        if not binary:raise ValueError('VirtualBox 도구가 없어 등록 여부를 확인하지 못했습니다. 기록을 보존합니다.')
+        version=command(binary,['--version'])
+        if not re.fullmatch(r'7\.2\.\d+r\d+(?:_.*)?',version):raise ValueError('지원 버전의 등록 목록을 확인해야 합니다.')
+        ids=[]
+        for line in command(binary,['list','vms']).splitlines():
+            if not line.strip():continue
+            match=re.fullmatch(r'".*" \{([0-9a-fA-F-]{36})\}',line)
+            if not match:raise ValueError('등록 목록 형식을 확인하지 못했습니다. 비어 있다고 가정하지 않습니다.')
+            ids.append(str(uuid.UUID(match[1])))
+        result['registered']=uid in ids
+        # Recheck the filesystem after the metadata query; never remove VM data.
+        try:target.lstat();result['folder_present']=True
+        except FileNotFoundError:pass
+        if result['registered'] or result['folder_present']:raise ValueError('VM 등록 또는 저장 폴더가 남아 있습니다. VirtualBox에서 해당 VM과 파일을 직접 확인하세요.')
+        result.update(can_clear=True,reason='조회 시점에 해당 UUID의 등록과 전용 폴더가 없습니다. 준비 기록만 정리할 수 있습니다.')
+    except (OSError,ValueError,TypeError,AttributeError) as error:
+        result['reason']=str(error) if isinstance(error,ValueError) else '준비 기록·파일 상태를 확인하지 못했습니다. 기록을 보존합니다.'
+    return result
+
+def recovery_check(store,vm):
+    with vm.exclusive():return _check_recovery(_recovery_state(store))
+
+def clear_preparation(store,vm,record_id,request_key):
+    if not isinstance(record_id,str) or not isinstance(request_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_key):raise ValueError('정리할 준비 ID와 요청 ID를 확인하세요.')
+    with vm.exclusive():
+        with store.connect() as c:
+            table=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vbox_recovery_audit'").fetchone()
+            receipt=c.execute('SELECT record_id FROM vbox_recovery_audit WHERE request_key=?',(request_key,)).fetchone() if table else None
+        if receipt:
+            if receipt['record_id']!=record_id:raise ValueError('같은 요청 ID에 다른 준비 기록이 전달되었습니다.')
+            return {'cleared':True,'record_id':record_id,'replayed':True}
+        before=_recovery_state(store);check=_check_recovery(before)
+        if not check['can_clear'] or check['record_id']!=record_id:raise ValueError(check['reason'])
+        with store.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            current={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")}
+            if current!=before:raise ValueError('확인 중 준비 기록이 바뀌었습니다. 다시 확인하세요.')
+            c.execute('CREATE TABLE IF NOT EXISTS vbox_recovery_audit(request_key TEXT PRIMARY KEY,record_id TEXT NOT NULL,snapshot TEXT NOT NULL,created REAL NOT NULL)')
+            c.execute('INSERT INTO vbox_recovery_audit VALUES(?,?,?,?)',(request_key,record_id,json.dumps(before,ensure_ascii=False),time.time()))
+            c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")
+        return {'cleared':True,'record_id':record_id,'replayed':False}
