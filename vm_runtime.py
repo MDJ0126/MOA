@@ -152,7 +152,9 @@ class VM:
         with self.exclusive():
             if self.session():
                 try:self.qmp('query-status')
-                except (OSError,ValueError):pass
+                except (OSError,ValueError):
+                    if pid_alive(self.session().get('pid')):
+                        raise ValueError('기존 VM 프로세스가 실행 중입니다. 제어 연결과 종료 상태를 확인한 뒤 설정을 저장하세요.') from None
                 else:raise ValueError('VM을 종료한 뒤 환경 설정을 저장하세요.')
             write_setting(self.store,'vm',{k:config[k] for k in DEFAULT})
         return settings(self.store)

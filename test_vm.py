@@ -12,6 +12,13 @@ from vm_runtime import VM,BusyVM,DEFAULT,validate_actions
 from supervisor import write_status
 
 class VMTests(unittest.TestCase):
+    def test_unreachable_live_vm_cannot_change_settings(self):
+        old=copy.deepcopy(DEFAULT)
+        with patch.object(self.vm,'session',return_value={'pid':123}), patch.object(self.vm,'qmp',side_effect=OSError('offline')), patch('vm_runtime.pid_alive',return_value=True):
+            with self.assertRaisesRegex(ValueError,'실행 중'):self.vm.save(dict(old,enabled=False))
+        from vm_runtime import settings
+        self.assertTrue(settings(self.store)['enabled'])
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent);self.store=Store(self.temp.name);self.vm=VM(self.store)
         save_team(self.store,PRESETS[1]);write_setting(self.store,'vm',dict(DEFAULT,enabled=True))

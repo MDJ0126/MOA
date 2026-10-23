@@ -11,7 +11,7 @@ async function main(){
  const search=d.querySelector('#taskSearch');search.value='History 000';search.dispatchEvent(new w.Event('input',{bubbles:true}));await until(()=>d.querySelector('#workCount').textContent==='1개 작업');
  d.querySelector('#allTasks [data-task]').click();await until(()=>d.querySelectorAll('#modalLogs .bubble-row').length===200);
  d.querySelector('#olderLogs').click();await until(()=>d.querySelectorAll('#modalLogs .bubble-row').length===400);
- d.querySelector('#olderLogs').click();await until(()=>d.querySelectorAll('#modalLogs .bubble-row').length===405);
+ const finalOlderButton=d.querySelector('#olderLogs');finalOlderButton.click();await until(()=>d.querySelectorAll('#modalLogs .bubble-row').length===405&&!finalOlderButton.disabled);
  assert.equal(d.querySelector('#olderLogs').hidden,true);
  assert.ok(d.querySelector('#modalTitle').textContent==='History 000');
  console.log('PASS: DOM pagination, old task outside snapshot, 405 older conversations loaded with terminal cursor');

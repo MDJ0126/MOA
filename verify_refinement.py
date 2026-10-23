@@ -9,6 +9,7 @@ import time
 import urllib.request
 import urllib.error
 from app import Store
+from test_runtime import node_executable
 
 ROOT=Path(__file__).resolve().parent
 with socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -45,7 +46,7 @@ with tempfile.TemporaryDirectory(dir=ROOT) as folder:
         for path,data in [('/api/tasks?status=invalid',None),('/api/tasks?page=invalid',None),('/api/tasks',[]),('/api/tasks',{'title':None}),('/api/setup/team',{'agents':[None]})]:
             try:request(path,data);raise AssertionError('invalid input accepted')
             except urllib.error.HTTPError as error:assert error.code==400,(path,error.code)
-        node=Path.home()/'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
+        node=node_executable()
         subprocess.run([str(node),'test_history.cjs',f'http://127.0.0.1:{port}'],cwd=ROOT,check=True,timeout=25)
         print('PASS: 635 tasks across 22 pages, full-history search, 405 unique logs across 3 pages, malformed requests return 400')
     finally:

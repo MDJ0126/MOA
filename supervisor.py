@@ -24,12 +24,16 @@ def write_status(path,status):
 
 def acquire(path):
     lock=open(path,'a+b');lock.seek(0);lock.write(b'0');lock.flush();lock.seek(0)
-    if os.name=='nt':
-        import msvcrt
-        msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
-    else:
-        import fcntl
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    try:
+        if os.name=='nt':
+            import msvcrt
+            msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BaseException:
+        lock.close()
+        raise
     return lock
 
 def main():
