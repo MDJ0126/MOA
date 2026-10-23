@@ -82,4 +82,5 @@ class AtomicHistoryTests(unittest.TestCase):
             backup(self.store.root,archive);restore(archive,destination)
             restored=Store(destination)
             restored.message(tid,'builder','saved instruction',request_key='backup-message-123')
-            state=restored.snapshot();self.assertEqual(len(state['deliveries']),1);self.assertEqual(state['outbox_pending'],1);self.assertTrue(state['paused'])
+            state=restored.snapshot();self.assertEqual(len(state['deliveries']),1);self.assertEqual(state['outbox_pending'],0);self.assertTrue(state['paused'])
+            with restored.connect() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM outbox WHERE state='held_restored'").fetchone()[0],1)

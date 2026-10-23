@@ -600,6 +600,8 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
             elif self.path=='/api/setup':
                 self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE})
+            elif self.path=='/api/slack/recovery':
+                self.send(200,slack.recovery())
             elif self.path.startswith('/api/vm/evidence?'):
                 tid=parse_qs(urlparse(self.path).query).get('task',[''])[0]
                 with store.connect() as c:exists=c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone()
@@ -742,6 +744,9 @@ def serve(root, port, model, url,demo_only=False):
                     self.send(200,save_team(store,data))
                 elif self.path=='/api/setup/slack':
                     self.send(200,save_slack(store,data))
+                elif self.path=='/api/slack/recovery':
+                    if demo_only:raise ValueError('데모 전용 실행에서는 복원 큐를 재개하지 않습니다.')
+                    self.send(200,slack.recover(data.get('action'),data.get('items')))
                 elif self.path=='/api/slack/test':
                     self.send(200,test_connection(store,data))
                 elif self.path == '/api/messages':

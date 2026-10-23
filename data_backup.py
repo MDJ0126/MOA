@@ -128,6 +128,10 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             if c.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('데이터베이스가 손상되었습니다.')
             c.execute("INSERT OR REPLACE INTO settings VALUES('paused','true')")
+            tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table in ('outbox','slack_inbox'):
+                if table in tables:
+                    c.execute(f"UPDATE {table} SET state='held_restored' WHERE state='pending'")
             for key in ('slack', 'vm'):
                 row = c.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
                 if row:

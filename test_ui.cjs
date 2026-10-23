@@ -140,6 +140,15 @@ async function main(){
  await w.testBackupRecovery();assert.equal(w.localStorage.getItem('moa.pendingBackup'),null);
  delete d.querySelector('#backupCreateState').dataset.accepted;
  w.fetch=installationFetch;
+ {const beforeRecoveryFetch=w.fetch;let held=[{kind:'notification',id:12,text:'<img src=x onerror=alert(1)>'},{kind:'instruction',id:'EvReview',text:'검토할 지시'}],recoveryPosts=[];
+ w.fetch=async(path,options={})=>{if(path==='/api/slack/recovery'){if(options.method==='POST'){const body=JSON.parse(options.body);recoveryPosts.push(body);held=held.filter(item=>!body.items.some(chosen=>chosen.kind===item.kind&&chosen.id===item.id));return new Response(JSON.stringify({processed:body.items.length,action:body.action}),{headers:{'Content-Type':'application/json'}})}return new Response(JSON.stringify({counts:{notification:held.filter(x=>x.kind==='notification').length,instruction:held.filter(x=>x.kind==='instruction').length},items:held}),{headers:{'Content-Type':'application/json'}})}return beforeRecoveryFetch(path,options)};
+ w.location.hash='settings/slack';await until(()=>d.querySelectorAll('[data-recovery-index]').length===2,'restored queue preview');
+ assert.equal(d.querySelector('#slackRecoveryItems img'),null);assert.ok(d.querySelector('#slackRecoveryItems').textContent.includes('<img'));
+ click('[data-action="resume-slack-recovery"]');await until(()=>d.querySelector('#toast').textContent.includes('선택하세요'),'explicit selection required');assert.equal(recoveryPosts.length,0);
+ d.querySelector('[data-recovery-index="0"]').checked=true;click('[data-action="resume-slack-recovery"]');await until(()=>d.querySelectorAll('[data-recovery-index]').length===1,'selective resume');
+ assert.deepEqual(recoveryPosts[0],{action:'resume',items:[{kind:'notification',id:12}]});
+ d.querySelector('[data-recovery-index="0"]').checked=true;click('[data-action="dismiss-slack-recovery"]');await until(()=>d.querySelector('#slackRecovery').hidden,'dismiss remaining item');
+ assert.equal(recoveryPosts[1].action,'dismiss');w.fetch=beforeRecoveryFetch;}
  docFailure=true;w.location.hash='docs/slack';await until(()=>d.querySelector('[data-action="retry-doc"]'),'guide error and retry');
  docFailure=false;click('[data-action="retry-doc"]');
  await until(()=>d.querySelector('#docContent h1')?.textContent==='Slack 연결하기','built-in guide');

@@ -63,6 +63,43 @@ class SlackService:
             c.execute('CREATE TABLE IF NOT EXISTS slack_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
             c.execute("INSERT OR IGNORE INTO slack_metadata VALUES('delivery_namespace',?)",(str(uuid.uuid4()),))
             self.delivery_namespace=uuid.UUID(c.execute("SELECT value FROM slack_metadata WHERE key='delivery_namespace'").fetchone()[0])
+            c.execute('CREATE TABLE IF NOT EXISTS slack_recovery_audit(seq INTEGER PRIMARY KEY,created REAL,action TEXT,items TEXT)')
+
+    def recovery(self):
+        items=[];counts={}
+        with self.store.connect() as c:
+            for kind,table in (('notification','outbox'),('instruction','slack_inbox')):
+                counts[kind]=c.execute(f"SELECT COUNT(*) FROM {table} WHERE state='held_restored'").fetchone()[0]
+                for row in c.execute(f"SELECT id,payload FROM {table} WHERE state='held_restored' ORDER BY rowid LIMIT 20"):
+                    payload=json.loads(row['payload'])
+                    text=payload.get('event',{}).get('text','') if kind=='instruction' else payload.get('content',{}).get('summary','')
+                    context=payload.get('event',{}).get('channel','') if kind=='instruction' else ' · '.join(str(payload.get(key,'')) for key in ('task_id','sender','recipient'))
+                    items.append({'kind':kind,'id':row['id'],'text':str(text),'context':context})
+        return {'counts':counts,'items':items}
+
+    def recover(self,action,items):
+        if action not in ('resume','dismiss') or not isinstance(items,list) or not 1<=len(items)<=40:raise ValueError('처리할 복원 항목을 1~40개 선택하세요.')
+        selected=[]
+        for item in items:
+            if not isinstance(item,dict) or item.get('kind') not in ('notification','instruction'):raise ValueError('복원 항목 종류 오류')
+            kind=item['kind'];identity=item.get('id')
+            if (kind=='notification' and (type(identity) is not int or identity<1)) or (kind=='instruction' and (not isinstance(identity,str) or not identity or len(identity)>512)):raise ValueError('복원 항목 ID 오류')
+            pair=(kind,identity)
+            if pair in selected:raise ValueError('중복 복원 항목입니다.')
+            selected.append(pair)
+        with self.store.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            for kind,identity in selected:
+                table='outbox' if kind=='notification' else 'slack_inbox'
+                if not c.execute(f"SELECT 1 FROM {table} WHERE id=? AND state='held_restored'",(identity,)).fetchone():raise ValueError('선택 항목이 이미 처리되었거나 변경되었습니다. 목록을 새로 확인하세요.')
+            for kind,identity in selected:
+                table='outbox' if kind=='notification' else 'slack_inbox'
+                if action=='resume':
+                    extra=',available_at=0' if kind=='notification' else ''
+                    c.execute(f"UPDATE {table} SET state='pending',attempts=0,error=''{extra} WHERE id=?",(identity,))
+                else:c.execute(f"UPDATE {table} SET state='dismissed' WHERE id=?",(identity,))
+            c.execute('INSERT INTO slack_recovery_audit(created,action,items) VALUES(?,?,?)',(time.time(),action,json.dumps(items,ensure_ascii=False)))
+        return {'processed':len(selected),'action':action}
 
     def enqueue(self,payload,connection):
         event_id=payload.get('event_id')
