@@ -1,5 +1,5 @@
 """One project-owned headless QEMU desktop with exclusive per-agent access."""
-from contextlib import contextmanager
+from contextlib import contextmanager,ExitStack
 import json
 import os
 from pathlib import Path
@@ -61,6 +61,7 @@ def validate_actions(value,pipeline):
     return result
 
 class BusyVM(ValueError):pass
+class VMAdmissionBusy(BusyVM):pass
 def pid_alive(pid):
     if not isinstance(pid,int) or pid<=0:return False
     if os.name=='nt':
@@ -245,14 +246,25 @@ class VM:
         elif kind=='wait':time.sleep(action['seconds'])
 
     @contextmanager
-    def stage(self,task,role,actor):
+    def admission(self):
+        with ExitStack() as stack:
+            try:stack.enter_context(self.exclusive())
+            except BusyVM as error:raise VMAdmissionBusy(str(error)) from None
+            yield
+
+    @contextmanager
+    def stage(self,task,role,actor,before=None):
         env=(json.loads(task['execution_plan']) if task['execution_plan'] else {}).get('environment',{})
-        if env.get('kind')!='vm':yield;return
-        with self.exclusive():
+        if env.get('kind')!='vm':
+            if before:before()
+            yield;return
+        with self.admission():
             if not same_configuration(env.get('config') or {},settings(self.store)):raise ValueError('접수 이후 VM 설정이 변경되었습니다. 현재 환경으로 새 작업을 등록하세요.')
             def active():
                 with self.store.connect() as c:row=c.execute('SELECT status FROM tasks WHERE id=?',(task['id'],)).fetchone()
                 return bool(row and row[0] in ('queued','running'))
+            if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
+            if before:before()
             if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
             self._start();owner={'task_id':task['id'],'agent':actor,'role':role,'since':time.time()}
             capture_started=False

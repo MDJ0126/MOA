@@ -69,7 +69,10 @@ class ModelTransportTests(unittest.TestCase):
         store=Store(self.temp.name);save_team(store,PRESETS[0]);write_setting(store,'vm',dict(DEFAULT,enabled=True))
         store.add('no duplicate guest input','llama',environment='vm',vm_actions=[{'role':'developer','action':'text','text':'example'}])
         self.status=503;worker=Worker(store,'stub',self.url)
-        with patch.object(worker.vm,'stage',return_value=nullcontext()):worker.tick()
+        def fake_stage(*args,before=None):
+            if before:before()
+            return nullcontext()
+        with patch.object(worker.vm,'stage',side_effect=fake_stage):worker.tick()
         task=store.snapshot()['tasks'][0]
         self.assertEqual((task['status'],self.calls),('failed',1));self.assertIn('자동 재시도하지',task['error'])
         detail=next(json.loads(m['content']) for m in store.snapshot()['messages'] if m['kind']=='model_error')

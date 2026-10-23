@@ -29,7 +29,7 @@ from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 import environment_profiles
 import vbox_setup
-from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
+from vm_runtime import VM,BusyVM,VMAdmissionBusy,settings as vm_settings,validate_actions
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_HASH=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -42,6 +42,8 @@ def has_vm_input(plan,role):
     env=plan.get('environment',{})
     return env.get('kind')=='vm' and any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[]))
 
+
+class StageDeferred(Exception):pass
 
 def checked_plan(task):
     plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
@@ -81,7 +83,7 @@ class Store:
             columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
             for name,definition in {'revision':'INTEGER DEFAULT 0','max_revisions':'INTEGER DEFAULT 2',
                     'acceptance':"TEXT DEFAULT ''",'verification':"TEXT DEFAULT '{}'",'retry_at':'REAL DEFAULT 0',
-                    'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER'}.items():
+                    'wait_reason':"TEXT DEFAULT ''",'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER'}.items():
                 if name not in columns:c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.execute('UPDATE tasks SET revision_budget=MIN(5,max_revisions) WHERE revision_budget IS NULL')
             message_columns={r[1] for r in c.execute('PRAGMA table_info(messages)')}
@@ -203,9 +205,9 @@ class Store:
                     source=folder/name
                     if source.is_file():
                         archive.mkdir(parents=True,exist_ok=True);shutil.copy2(source,archive/name)
-                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',failures=0,retry_at=0 WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
+                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',wait_reason='',failures=0,retry_at=0 WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
             elif action == 'cancel':
-                if c.execute("UPDATE tasks SET status='cancelled' WHERE id=? AND status IN ('queued','running','failed','interrupted')", (tid,)).rowcount != 1:
+                if c.execute("UPDATE tasks SET status='cancelled',wait_reason='' WHERE id=? AND status IN ('queued','running','failed','interrupted')", (tid,)).rowcount != 1:
                     raise ValueError('취소 가능한 작업이 없습니다.')
             else:
                 raise ValueError('지원하지 않는 제어입니다.')
@@ -371,7 +373,7 @@ class Worker:
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
                     blocked=True;error=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
                 retry=not blocked and row['auto_recover'] and row['failures']<3
-                c.execute('UPDATE tasks SET status=?,failures=failures+?,error=? WHERE id=?',('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
+                c.execute("UPDATE tasks SET status=?,failures=failures+?,error=?,wait_reason='' WHERE id=?",('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
 
     def package(self, tid, status, verification=None):
         s=self.store
@@ -456,28 +458,31 @@ class Worker:
                 role = pipeline[stage];actor=assignment[role]
                 task['agent']=next(a for a in plan['agents'] if a['id']==actor)
                 task['execution_environment']=plan.get('environment',{'kind':'local'})
-                self.checkpoint(tid,stage,task['revision'],files)
-                if role=='reviewer':
-                    verification=run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0}
-                    missing=[p for p in json.loads(task['required_files']) if not files.path(p).is_file()]
-                    verification['missing_files']=missing
-                    verification['passed']=verification['passed'] and not missing
-                    verification['source_hashes']=self.file_hashes(files)
-                    if plan.get('environment',{}).get('kind')=='vm':verification['vm']={'input_scope':'QMP guest input and screenshots','visual_goal_verified':False,'file_checks_location':'host'}
-                    contract=plan.get('environment',{}).get('execution_contract')
-                    if contract is not None:verification['execution_target']={'target_os':contract['target_os'],'runner':'host','architecture':contract['architecture'],'execution_tests_performed':task['mode']!='demo' and bool(verification.get('tests_run')),'scope':'Python checks only; engine and GUI not verified'}
-                    task['verification']=verification
-                    s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False),capability=role)
-                    with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(verification,ensure_ascii=False),tid))
-                else:
+                def prepare_stage():
                     with s.connect() as c:
-                        task['verification']=json.loads(c.execute('SELECT verification FROM tasks WHERE id=?',(tid,)).fetchone()[0])
-                if role=='reporter' and task['verification'].get('source_hashes')!=self.file_hashes(files):
-                    with s.connect() as c:c.execute("UPDATE tasks SET stage=?,status='queued',error='검증 이후 파일 변경: 재검증 필요' WHERE id=? AND status='running'",(pipeline.index('reviewer'),tid))
-                    s.log(tid,'system','verification_invalidated','검증한 파일과 현재 파일의 해시가 다릅니다.')
-                    return True
-                s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})',capability=role)
-                with self.vm.stage(task,role,actor):
+                        if c.execute("UPDATE tasks SET wait_reason='',error='' WHERE id=? AND status='running'",(tid,)).rowcount!=1:raise StageDeferred()
+                    self.checkpoint(tid,stage,task['revision'],files)
+                    if role=='reviewer':
+                        verification=run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0}
+                        missing=[p for p in json.loads(task['required_files']) if not files.path(p).is_file()]
+                        verification['missing_files']=missing
+                        verification['passed']=verification['passed'] and not missing
+                        verification['source_hashes']=self.file_hashes(files)
+                        if plan.get('environment',{}).get('kind')=='vm':verification['vm']={'input_scope':'QMP guest input and screenshots','visual_goal_verified':False,'file_checks_location':'host'}
+                        contract=plan.get('environment',{}).get('execution_contract')
+                        if contract is not None:verification['execution_target']={'target_os':contract['target_os'],'runner':'host','architecture':contract['architecture'],'execution_tests_performed':task['mode']!='demo' and bool(verification.get('tests_run')),'scope':'Python checks only; engine and GUI not verified'}
+                        task['verification']=verification
+                        s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False),capability=role)
+                        with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(verification,ensure_ascii=False),tid))
+                    else:
+                        with s.connect() as c:
+                            task['verification']=json.loads(c.execute('SELECT verification FROM tasks WHERE id=?',(tid,)).fetchone()[0])
+                    if role=='reporter' and task['verification'].get('source_hashes')!=self.file_hashes(files):
+                        with s.connect() as c:c.execute("UPDATE tasks SET stage=?,status='queued',error='검증 이후 파일 변경: 재검증 필요' WHERE id=? AND status='running'",(pipeline.index('reviewer'),tid))
+                        s.log(tid,'system','verification_invalidated','검증한 파일과 현재 파일의 해시가 다릅니다.')
+                        raise StageDeferred()
+                    s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})',capability=role)
+                with self.vm.stage(task,role,actor,before=prepare_stage):
                     result = backend.run(task, role, history, files, lambda kind, text: s.log(tid, actor, kind, text,capability=role))
                 with s.connect() as c:
                     if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':
@@ -511,8 +516,19 @@ class Worker:
                 with s.connect() as c:
                     c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'", (stage+1,tid))
             return True
-        except BusyVM:
-            with s.connect() as c:c.execute("UPDATE tasks SET status='queued',retry_at=? WHERE id=? AND status='running'",(time.time()+1,tid))
+        except StageDeferred:return True
+        except VMAdmissionBusy:
+            try:
+                with s.connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    current=c.execute('SELECT status,wait_reason FROM tasks WHERE id=?',(tid,)).fetchone()
+                    if not current or current['status']!='running':return True
+                    message='공유 VM 사용권 대기 중입니다.'
+                    c.execute("UPDATE tasks SET status='queued',wait_reason='vm_access',error=?,retry_at=? WHERE id=? AND status='running'",(message,time.time()+1,tid))
+                    if current['wait_reason']!='vm_access':
+                        c.execute('INSERT INTO messages(task_id,agent,kind,content,created,capability) VALUES(?,?,?,?,?,?)',(tid,actor,'control',message,time.time(),role))
+            except sqlite3.Error:
+                with s.connect() as c:c.execute("UPDATE tasks SET status='interrupted',wait_reason='',error='VM 대기 기록 저장 실패. 기록 확인 후 수동 재개하세요.' WHERE id=? AND status='running'",(tid,))
             return True
         except Exception as e:
             with s.connect() as c:
