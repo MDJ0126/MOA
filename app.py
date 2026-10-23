@@ -46,12 +46,26 @@ def has_vm_input(plan,role):
 
 class StageDeferred(Exception):pass
 
+class InvalidInstructionState(ValueError):pass
+
+
+def checked_instruction_state(task,pipeline):
+    if not isinstance(pipeline,list) or not pipeline:raise InvalidInstructionState('추가 지시의 실행 단계 목록 오류')
+    keys=task.keys();pending=task['pending_instruction_stage'] if 'pending_instruction_stage' in keys else None
+    review=task['instruction_review_required'] if 'instruction_review_required' in keys else 0
+    if type(task['stage']) is not int or not 0<=task['stage']<len(pipeline):raise InvalidInstructionState('추가 지시의 실행 단계 오류')
+    if pending is not None and (type(pending) is not int or not 0<=pending<len(pipeline)):raise InvalidInstructionState('추가 지시의 담당 단계 기록 오류')
+    if type(review) is not int or review not in (0,1):raise InvalidInstructionState('추가 지시의 수동 확인 표시 오류')
+    return pending,review
+
+
 def checked_plan(task):
     plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
     if not isinstance(plan,dict):raise ValueError('실행 계획 객체 오류')
     clean=validate_team({'agents':plan.get('agents'),'pipeline':plan.get('pipeline')})
     pipeline=clean['pipeline'];assignment=plan.get('assignment')
     if not isinstance(assignment,dict) or task['mode'] not in ('demo','llama','ollama') or type(task['stage']) is not int or not 0<=task['stage']<len(pipeline):raise ValueError('실행 단계 오류')
+    checked_instruction_state(task,pipeline)
     agents={a['id']:a for a in clean['agents']}
     for role in pipeline:
         actor=assignment.get(role)
@@ -63,6 +77,15 @@ def checked_plan(task):
     if environment.get('selection')=='profile' and 'execution_contract' not in environment:raise ValueError('저장 환경의 실행 계약이 없습니다.')
     if 'execution_contract' in environment:environment_profiles.check_contract(environment['execution_contract'],environment.get('kind','local'))
     return plan
+
+
+def public_task(row):
+    task=dict(row);invalid=[]
+    for field in ('pending_instruction_stage','instruction_review_required'):
+        if isinstance(task.get(field),(bytes,bytearray,memoryview)):
+            task[field]='바이너리 형식 오류';invalid.append(field)
+    if invalid:task['invalid_instruction_fields']=invalid
+    return task
 
 
 class Store:
@@ -190,7 +213,7 @@ class Store:
         with self.connect() as c:
             bound=f' LIMIT {int(limit)}' if limit else ''
             messages=[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY seq DESC'+bound)]
-            return {'tasks': [dict(r) for r in c.execute('SELECT * FROM tasks ORDER BY created DESC'+bound)],
+            return {'tasks': [public_task(r) for r in c.execute('SELECT * FROM tasks ORDER BY created DESC'+bound)],
                     'messages': list(reversed(messages)),
                     'message_count':c.execute('SELECT COUNT(*) FROM messages').fetchone()[0],
                     'deliveries':list(reversed([dict(r) for r in c.execute('SELECT * FROM deliveries ORDER BY id DESC'+bound)])),
@@ -268,15 +291,16 @@ class Store:
             if request_key is not None and c.execute('SELECT 1 FROM message_requests WHERE request_key=?',(request_key,)).fetchone():
                 self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key,_connection=c)
                 return {'recorded':True,'application':'already_recorded','execution_confirmed':False}
-            current=c.execute('SELECT status,stage,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+            current=c.execute('SELECT status,stage,pending_instruction_stage,instruction_review_required FROM tasks WHERE id=?',(tid,)).fetchone()
             if not current:raise ValueError('작업 없음')
             if current['status'] not in ('queued','running','failed','interrupted'):raise ValueError('완료·취소된 작업에는 새 지시를 적용할 수 없습니다. 내용을 유지하고 새 작업으로 맡겨 주세요.')
+            checked_instruction_state(current,plan['pipeline'])
             candidates=[i for i,role in enumerate(plan['pipeline']) if plan['assignment'][role]==recipient and (not target_role or role==target_role)]
             target=next((i for i in candidates if i>=current['stage']),candidates[0])
             self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key,_connection=c)
             pending=current['pending_instruction_stage'];pending=target if pending is None else min(pending,target)
             c.execute('UPDATE tasks SET pending_instruction_stage=? WHERE id=?',(pending,tid))
-            return {'recorded':True,'application':'resume_required' if current['status'] in ('failed','interrupted') else 'pending_stage','target_stage':target,'execution_confirmed':False}
+            return {'recorded':True,'application':'resume_required' if current['status'] in ('failed','interrupted') or current['instruction_review_required'] else 'pending_stage','target_stage':target,'execution_confirmed':False}
 
 
 
@@ -395,7 +419,7 @@ class Worker:
                     if row['instruction_review_required']:error='추가 지시로 VM 입력 단계의 재실행 확인이 필요합니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                     elif blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
-                    blocked=True;error=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
+                    blocked=True;error=str(exc) if isinstance(exc,(environment_profiles.UnavailableEnvironment,InvalidInstructionState)) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
                 retry=not blocked and row['auto_recover'] and row['failures']<3
                 c.execute("UPDATE tasks SET status=?,failures=failures+?,error=?,wait_reason='' WHERE id=?",('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
 
@@ -447,11 +471,20 @@ class Worker:
                 for p in workspace_files(files.folder)}
 
     def defer_instruction(self,c,tid,plan,stage):
-        current=c.execute('SELECT status,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+        current=c.execute('SELECT status,stage,pending_instruction_stage,instruction_review_required FROM tasks WHERE id=?',(tid,)).fetchone()
         if not current or current['status']!='running':return False
-        target=current['pending_instruction_stage']
+        try:target,review_required=checked_instruction_state(current,plan['pipeline'])
+        except ValueError:
+            message='추가 지시의 단계·확인 기록이 손상되어 보류했습니다. 원래 요청과 백업을 확인하세요.'
+            c.execute("UPDATE tasks SET status='interrupted',error=?,wait_reason='' WHERE id=?",(message,tid))
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','error',message,time.time()))
+            return True
+        if review_required:
+            message='추가 지시 재실행의 수동 확인이 필요합니다. 게스트 상태 확인 후 다시 이어가기를 사용하세요.'
+            c.execute("UPDATE tasks SET status='interrupted',error=?,wait_reason='' WHERE id=?",(message,tid))
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','control',message,time.time()))
+            return True
         if target is None:return False
-        if type(target) is not int or not 0<=target<len(plan['pipeline']):raise ValueError('추가 지시의 담당 단계 기록 오류')
         if target>stage:return False
         review=any(has_vm_input(plan,role) for role in plan['pipeline'][target:stage+1])
         message='추가 지시를 반영하기 위해 담당 단계부터 다시 진행합니다.'
@@ -476,7 +509,7 @@ class Worker:
                     c.execute("UPDATE tasks SET status='interrupted',error='데모 전용 실행에서 실제 AI·VM 작업을 보류했습니다.' WHERE id=? AND status='queued'",(task['id'],));return True
             try:plan=checked_plan(task)
             except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
-                message=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 작업을 보류했습니다.'
+                message=str(exc) if isinstance(exc,(environment_profiles.UnavailableEnvironment,InvalidInstructionState)) else '저장된 실행 계획·단계를 확인하지 못해 작업을 보류했습니다.'
                 c.execute('BEGIN IMMEDIATE')
                 if c.execute("UPDATE tasks SET status='interrupted',error=? WHERE id=? AND status='queued'",(message,task['id'])).rowcount:
                     c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(task['id'],'system','error',message,time.time()))
@@ -491,11 +524,15 @@ class Worker:
             backend = Demo() if task['mode'] == 'demo' else Llama(self.model,self.url) if task['mode']=='llama' else Ollama(self.model, self.url)
             for stage in range(task['stage'], len(pipeline)):
                 with s._write_transaction() as c:
-                    current=c.execute('SELECT status,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+                    current=c.execute('SELECT status,stage,pending_instruction_stage,instruction_review_required FROM tasks WHERE id=?',(tid,)).fetchone()
                     state=current['status']
                     paused = c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == 'true'
                     if state != 'running':return True
-                    pending=current['pending_instruction_stage']
+                    try:pending,review_required=checked_instruction_state(current,pipeline)
+                    except ValueError:
+                        if self.defer_instruction(c,tid,plan,stage):return True
+                        raise
+                    if review_required and self.defer_instruction(c,tid,plan,stage):return True
                     if pending is not None and pending<stage and self.defer_instruction(c,tid,plan,stage):return True
                     if pending==stage:c.execute('UPDATE tasks SET pending_instruction_stage=NULL WHERE id=?',(tid,))
                     if paused or self.stop.is_set():
@@ -790,7 +827,7 @@ def serve(root, port, model, url,demo_only=False):
                 where=' WHERE '+' AND '.join(filters) if filters else ''
                 with store.connect() as c:
                     total=c.execute('SELECT count(*) FROM tasks'+where,args).fetchone()[0]
-                    rows=[dict(r) for r in c.execute('SELECT * FROM tasks'+where+' ORDER BY created DESC,id DESC LIMIT 30 OFFSET ?',args+[page*30])]
+                    rows=[public_task(r) for r in c.execute('SELECT * FROM tasks'+where+' ORDER BY created DESC,id DESC LIMIT 30 OFFSET ?',args+[page*30])]
                 self.send(200,{'tasks':rows,'total':total,'page':page,'has_more':(page+1)*30<total})
             elif self.path.startswith('/api/logs/export?'):
                 query=parse_qs(urlparse(self.path).query);tid=query.get('task',[''])[0];agent=query.get('agent',[''])[0]
