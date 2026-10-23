@@ -14,3 +14,5 @@
 .vm-screen{height:auto;max-height:none}
 
 details.settings-section>summary{font-size:15px;font-weight:600;cursor:pointer;color:var(--ink)}details.settings-section[open]>summary{margin-bottom:20px}#taskOptionsSummary{font-size:12px;font-weight:400}#taskProfile{margin-left:auto;max-width:55%;white-space:normal;line-height:1.5;text-align:right}
+
+.vm-step{border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}.vm-step .connection-heading{margin-bottom:10px}.vm-step .text-button{padding:4px 8px}.vm-step textarea{min-height:70px}

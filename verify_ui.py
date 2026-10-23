@@ -27,5 +27,8 @@ with tempfile.TemporaryDirectory(dir=root) as data:
         drafts=subprocess.run([str(node),'test_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(drafts.stdout);print(drafts.stderr)
         if drafts.returncode:raise SystemExit(drafts.returncode)
+        steps=subprocess.run([str(node),'test_vm_steps.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        print(steps.stdout);print(steps.stderr)
+        if steps.returncode:raise SystemExit(steps.returncode)
     finally:
         process.terminate();process.wait(timeout=10)
