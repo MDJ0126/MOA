@@ -115,13 +115,22 @@ def cpu_usage(system):
         elif system=='Linux':
             fields=Path('/proc/stat').read_text().splitlines()[0].split()
             if fields[0]!='cpu':return None
-            values=list(map(int,fields[1:9]));sample=(system,values[3]+values[4],sum(values))
+            values=list(map(int,fields[1:9]))
+            if len(values)<5 or any(value<0 for value in values):return None
+            sample=(system,values[3]+values[4],sum(values))
         else:return None
-    except (OSError,ValueError,IndexError):return None
+    except (OSError,ValueError,IndexError,AttributeError):return None
     with LOCK:
         previous=_cpu_sample;_cpu_sample=sample
     if previous is None or previous[0]!=system or sample[2]<=previous[2] or sample[1]<previous[1]:return None
+    if sample[1]-previous[1]>sample[2]-previous[2]:return None
     return round(max(0,min(100,100*(1-(sample[1]-previous[1])/(sample[2]-previous[2])))),1)
+
+def _memory_reading(total,available=None):
+    if type(total) is not int or total<=0:return {}
+    result={'ram_gib':round(total/2**30,2)}
+    if type(available) is int and 0<=available<=total:result['available_ram_gib']=round(available/2**30,2)
+    return result
 
 def hardware():
     result={'os':platform.system(),'logical_cpus':os.cpu_count(),'ram_gib':None,'available_ram_gib':None}
@@ -129,23 +138,24 @@ def hardware():
         class M(ctypes.Structure):
             _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong)]+[(n,ctypes.c_ulonglong) for n in ('total','available','p1','p2','v1','v2','ex')]
         m=M();m.length=ctypes.sizeof(m)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
-            result.update(ram_gib=round(m.total/2**30,2),available_ram_gib=round(m.available/2**30,2))
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):result.update(_memory_reading(m.total,m.available))
+        except (OSError,AttributeError):pass
         try:
             import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:result['cpu']=winreg.QueryValueEx(key,'ProcessorNameString')[0].strip()
-        except OSError:pass
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:name=winreg.QueryValueEx(key,'ProcessorNameString')[0]
+            if isinstance(name,str) and name.strip():result['cpu']=name.strip()
+        except (OSError,ImportError):pass
     elif platform.system()=='Linux':
         try:
             values={line.split(':')[0]:int(line.split()[1])*1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith(('MemTotal:','MemAvailable:'))}
-            result['ram_gib']=round(values['MemTotal']/2**30,2)
-            if 'MemAvailable' in values:result['available_ram_gib']=round(values['MemAvailable']/2**30,2)
-        except (OSError,ValueError,KeyError,IndexError):pass
+            result.update(_memory_reading(values['MemTotal'],values.get('MemAvailable')))
+        except (OSError,ValueError,KeyError,IndexError,OverflowError):pass
     elif platform.system()=='Darwin':
         try:
             query=subprocess.run(['/usr/sbin/sysctl','-n','hw.memsize'],capture_output=True,text=True,timeout=2,check=True)
-            result['ram_gib']=round(int(query.stdout.strip())/2**30,2)
-        except (OSError,ValueError,subprocess.SubprocessError):pass
+            result.update(_memory_reading(int(query.stdout.strip())))
+        except (OSError,ValueError,OverflowError,subprocess.SubprocessError):pass
         # Reclaimable macOS memory is not equivalent to free pages; leave unknown.
     total=result['ram_gib'];free=result['available_ram_gib']
     result['memory_used_percent']=round(max(0,min(100,100*(1-free/total))),1) if total and free is not None else None
