@@ -20,7 +20,7 @@ class VBoxPreparationTests(unittest.TestCase):
         stack=ExitStack();self.addCleanup(stack.close)
         stack.enter_context(patch.object(vbox,'ROOT',self.root))
         stack.enter_context(patch.object(vbox,'identity',return_value={'os':'windows','architecture':'AMD64'}))
-        stack.enter_context(patch.object(vbox,'recommend',side_effect=lambda p:recommend(p,{'os':'Windows','logical_cpus':12,'ram_gib':32,'available_ram_gib':24})))
+        stack.enter_context(patch.object(vbox,'recommend',side_effect=lambda p:recommend(p,{'os':'Windows','architecture':'AMD64','cpu_used_percent':0,'logical_cpus':12,'ram_gib':32,'available_ram_gib':24})))
         stack.enter_context(patch.object(vbox,'executable',return_value='fake/VBoxManage.exe'))
         stack.enter_context(patch.object(vbox.shutil,'disk_usage',return_value=SimpleNamespace(free=300*2**30)))
         stack.enter_context(patch.object(vbox,'command',side_effect=self.command))
@@ -118,6 +118,13 @@ class VBoxPreparationTests(unittest.TestCase):
         self.assertNotEqual(plan['request']['preset'],'auto')
         with patch.object(vbox,'recommend',side_effect=lambda p:recommend(p,{'os':'Windows','logical_cpus':2,'ram_gib':8,'available_ram_gib':1})):
             self.assertEqual(vbox.prepare(self.store,self.vm,plan['id'])['state'],'prepared')
+
+    def test_auto_without_a_fitting_recommendation_never_uses_light_fallback(self):
+        self.request['preset']='auto'
+        with patch.object(vbox,'recommend',side_effect=lambda p:recommend(p,{'os':'Windows','architecture':'AMD64','cpu_used_percent':99,'logical_cpus':2,'ram_gib':8,'available_ram_gib':1})):
+            with self.assertRaises(ValueError):self.preview()
+        self.assertEqual(self.calls,[])
+        self.assertEqual(read_setting(self.store,'vbox_plan',None),None)
 
     def test_custom_install_path_requires_actual_absolute_vboxmanage(self):
         binary=self.root/'VBoxManage.exe';binary.write_bytes(b'fake; not executed')

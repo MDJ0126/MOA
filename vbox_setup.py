@@ -146,7 +146,8 @@ def build(request,uid):
     if not isinstance(expected,str) or expected and not re.fullmatch(r'[0-9a-fA-F]{64}',expected):raise ValueError('공식 SHA-256은 64자리 16진수로 입력하세요.')
     preset_id=request.get('preset','auto')
     if preset_id not in ('auto','light','balanced','development'):raise ValueError('VM 프리셋 오류')
-    selected=(suggestion['recommended'] or 'light') if preset_id=='auto' else preset_id
+    if preset_id=='auto' and not suggestion['recommended']:raise ValueError('현재 자동 추천을 선택할 수 없습니다. '+suggestion['note'])
+    selected=suggestion['recommended'] if preset_id=='auto' else preset_id
     preset=next(p for p in suggestion['presets'] if p['id']==selected)
     owner=runtime_owner()
     if owner is None:raise ValueError('원래 runtime 소유 표식을 확인하세요.')
