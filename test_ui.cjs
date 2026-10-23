@@ -98,6 +98,7 @@ async function main(){
  const vmConfig=await(await fetch(base+'/api/vm')).json();assert.equal(vmConfig.config.memory_mb,1024);assert.equal(vmConfig.state,'stopped');
  assert.equal(d.querySelector('#taskEnvironment').options.length,2);
  click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
+ await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');
  click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');
  const installationFetch=w.fetch;
  w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({files:3,tasks:2,messages:7,restored:false}),{headers:{'Content-Type':'application/json'}}):installationFetch(path,options);

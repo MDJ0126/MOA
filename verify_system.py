@@ -44,6 +44,8 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             raise RuntimeError('서버 시작 실패')
         assert '로컬 에이전트 팀'.encode() in request('/')
         setup=request('/api/setup');assert len(setup['presets'])==3
+        observed=request('/api/health');assert observed['app']['pid']==process.pid and observed['worker']['thread_alive'] is True
+        assert observed['version']==1 and 'scope' in observed and 'active' in observed['queue']
         diagnosis=request('/api/diagnostics');assert diagnosis['version']==1 and len(diagnosis['checks'])==5
         fixture=Store(Path(folder)/'backup-fixture')
         archive=root/'backups'/('test-'+uuid.uuid4().hex+'.zip')

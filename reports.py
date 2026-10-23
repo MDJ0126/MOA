@@ -75,7 +75,7 @@ def workspace_files(workspace):
     return result
 
 
-def _digest(path):
+def hash_file(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
@@ -97,12 +97,12 @@ def publish(folder,workspace,report):
         for source in sources:
             relative=source.relative_to(workspace);target=staged/'workspace'/relative
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
-            if _digest(target)!=expected[str(relative)]:raise ValueError('보고 준비 중 결과 파일 내용이 변경되었습니다.')
+            if hash_file(target)!=expected[str(relative)]:raise ValueError('보고 준비 중 결과 파일 내용이 변경되었습니다.')
         for name in report['vm_evidence']:
             source=folder/name;target=staged/name
             if source.is_symlink() or not source.resolve().is_relative_to(folder.resolve()):raise ValueError('VM 근거 파일 경로가 올바르지 않습니다.')
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
-            if _digest(target)!=report['vm_evidence_sha256'][name]:raise ValueError('VM 근거 파일이 변경되었습니다.')
+            if hash_file(target)!=report['vm_evidence_sha256'][name]:raise ValueError('VM 근거 파일이 변경되었습니다.')
         (staged/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         (staged/'report.md').write_text(markdown(report),encoding='utf-8',newline='\n')
         agents=set((*LABELS,*(a['id'] for a in report['team']['agents']),'system','user'))

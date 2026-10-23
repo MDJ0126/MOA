@@ -20,7 +20,9 @@ from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status
 from local_model import Llama,relevant_history
 from conversation import for_agent,enrich,task_messages
-from reports import publish,workspace_files
+from reports import publish,workspace_files,hash_file
+from supervisor import write_status
+from health import status as health_status
 from model_transport import request_json,ollama_text,model_output,ModelError,RETRY_STATUSES,validate_url
 from artifacts import open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
@@ -313,6 +315,7 @@ class Worker:
         self.store, self.model, self.url = store, model, url
         self.vm=VM(store)
         self.stop = threading.Event()
+        self.last_loop_at=None;self.heartbeat_write_ok=None
 
     def recover(self):
         with self.store.connect() as c:
@@ -344,7 +347,7 @@ class Worker:
                   'model_file':CONFIG.get('model_file') if task['mode']=='llama' else None,
                   'system_source_sha256':SOURCE_HASH,
                   'revision':task['revision'],'verification':verification or json.loads(task['verification']),
-                  'files':[{'path':str(p.relative_to(workspace)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in workspace_files(workspace)],
+                  'files':[{'path':str(p.relative_to(workspace)),'sha256':hash_file(p)} for p in workspace_files(workspace)],
                   'slack_reporting_enabled':bool(read_setting(s,'slack',{}).get('enabled')),
                   'limitations':['엔진 미연결','Python 실행은 OS 보안 샌드박스가 아님']+([] if read_setting(s,'slack',{}).get('enabled') else ['Slack 미연결'])+(['데모: 실제 AI 추론 없음'] if task['mode']=='demo' else []),
                   'history':rows}
@@ -353,7 +356,7 @@ class Worker:
         manifest['team']=plan
         manifest['execution_environment']=plan.get('environment',{'kind':'local'})
         manifest['vm_evidence']=[str(p.relative_to(folder)).replace('\\','/') for p in (folder/'vm').glob('*.png')]
-        manifest['vm_evidence_sha256']={name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in manifest['vm_evidence']}
+        manifest['vm_evidence_sha256']={name:hash_file(folder/name) for name in manifest['vm_evidence']}
         if manifest['execution_environment'].get('kind')=='vm':manifest['limitations'].append('VM 환경 요청. 실제 입력·캡처 수행은 작업 기록과 근거 파일을 확인하세요. 화면 목표는 자동 판정하지 않으며 파일 생성·Python 검증은 호스트에서 실행합니다.')
         rows=[enrich(m,plan) for m in rows]
         manifest['history']=rows
@@ -367,11 +370,11 @@ class Worker:
         folder.mkdir(parents=True,exist_ok=True)
         for p in workspace_files(files.folder):
             target=folder/p.relative_to(files.folder);target.parent.mkdir(parents=True,exist_ok=True)
-            target.write_bytes(p.read_bytes())
+            shutil.copyfile(p,target)
         self.store.log(tid,'system','checkpoint',str(folder))
 
     def file_hashes(self,files):
-        return {str(p.relative_to(files.folder)):hashlib.sha256(p.read_bytes()).hexdigest()
+        return {str(p.relative_to(files.folder)):hash_file(p)
                 for p in workspace_files(files.folder)}
 
     def tick(self):
@@ -486,13 +489,15 @@ class Worker:
     def loop(self):
         while not self.stop.is_set():
             try:
-                (self.store.root/'heartbeat.json').write_text(json.dumps({'pid':os.getpid(),'time':time.time()}),encoding='utf-8')
+                self.last_loop_at=time.time()
+                self.heartbeat_write_ok=write_status(self.store.root/'heartbeat.json',{'pid':os.getpid(),'time':self.last_loop_at})
                 if not self.tick():self.stop.wait(.5)
             except Exception as e:
                 self.store.log('-','system','worker_error',repr(e));self.stop.wait(2)
 
 
 def serve(root, port, model, url):
+    server_started=time.time();instance=uuid.uuid4().hex
     store = Store(root)
     worker = Worker(store, model, url)
     # OS file lock prevents a second server/worker using the same state directory.
@@ -534,7 +539,9 @@ def serve(root, port, model, url):
         def do_GET(self):
             if self.headers.get('Host') not in (f'127.0.0.1:{port}',f'localhost:{port}'):
                 self.send(403,{'error':'host rejected'});return
-            if self.path == '/api/state':
+            if self.path=='/api/health':
+                self.send(200,{**health_status(store,worker,thread,server_started,instance),'app_source_sha256':SOURCE_HASH})
+            elif self.path == '/api/state':
                 state = store.snapshot(limit=600)
                 state['model'] = model or '미설정'
                 state['model_description']=CONFIG.get('model_description',model)
