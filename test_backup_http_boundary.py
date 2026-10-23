@@ -58,6 +58,14 @@ class BackupHttpBoundaryTests(unittest.TestCase):
                             self.assertEqual(request('/api/backups')['jobs'],[])
                             self.assertEqual(request('/api/health')['app']['pid'],process.pid)
                             self.assertEqual(outside.read_text(),json.dumps({'state':'completed'}))
+                    archive.unlink(missing_ok=True);status.unlink(missing_ok=True)
+                    with store.connect() as c:c.execute('UPDATE backup_requests SET helper_pid=?',(process.pid,))
+                    status.write_text(json.dumps({'state':'failed','helper_pid':456,'message':'previous attempt'}))
+                    current=request('/api/backups/request?key=request-123')
+                    self.assertEqual(current['state'],'waiting');self.assertEqual(current['helper_pid'],process.pid)
+                    self.assertEqual(request('/api/backups')['jobs'],[])
+                    status.write_text(json.dumps({'state':'waiting','helper_pid':process.pid,'message':'current attempt'}))
+                    self.assertEqual(request('/api/backups')['jobs'][0]['message'],'current attempt')
                 finally:
                     if process.poll() is None:
                         try:request_stop(project,port,expected_pid=process.pid);process.wait(timeout=10)

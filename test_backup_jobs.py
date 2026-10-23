@@ -122,3 +122,42 @@ class BackupFileBoundaryTests(_BackupFixture):
         archive,status=self.prepare();status.write_text(json.dumps({'state':'waiting','helper_pid':2**80}))
         with patch('backup_jobs.pid_alive',return_value=False) as alive:schedule_request(self.store,self.root,'request-123',123,self.launch)
         self.assertTrue(all(type(c.args[0]) is int and 0<c.args[0]<=0xffffffff for c in alive.call_args_list));self.assertEqual(self.launch.call_count,2)
+
+    def test_retried_helper_does_not_inherit_previous_failure(self):
+        archive,status=self.prepare();status.write_text(json.dumps({'state':'failed','helper_pid':456,'message':'old failure'}))
+        self.launch.return_value=SimpleNamespace(pid=789)
+        with patch('backup_jobs.pid_alive',return_value=False):schedule_request(self.store,self.root,'request-123',123,self.launch)
+        with patch('backup_jobs.pid_alive',return_value=True):current=request_status(self.store,self.root,'request-123')
+        self.assertEqual(current['state'],'waiting');self.assertEqual(current['helper_pid'],789)
+        self.assertEqual(list_backups(self.root,self.store)['jobs'],[])
+
+    def test_previous_waiting_helper_cannot_block_new_attempt(self):
+        archive,status=self.prepare();status.write_text(json.dumps({'state':'waiting','helper_pid':456}))
+        with self.store.connect() as c:c.execute("UPDATE backup_requests SET helper_pid=789")
+        self.launch.return_value=SimpleNamespace(pid=999)
+        with patch('backup_jobs.pid_alive',side_effect=lambda pid:pid==456):schedule_request(self.store,self.root,'request-123',123,self.launch)
+        self.assertEqual(self.launch.call_count,2)
+
+    def test_deeply_nested_status_is_preserved_and_retryable(self):
+        archive,status=self.prepare();raw='['*1500+']'*1500;status.write_text(raw)
+        with patch('backup_jobs.pid_alive',return_value=False):
+            self.assertEqual(request_status(self.store,self.root,'request-123')['state'],'failed')
+            schedule_request(self.store,self.root,'request-123',123,self.launch)
+        self.assertEqual(status.read_text(),raw);self.assertEqual(list_backups(self.root)['jobs'],[]);self.assertEqual(self.launch.call_count,2)
+
+    def test_recursive_json_decoder_cannot_break_status_recovery(self):
+        archive,status=self.prepare();status.write_text('['*1500+']'*1500)
+        decoder=json.JSONDecoder();decoder.scan_once=json.scanner.py_make_scanner(decoder)
+        with patch('backup_jobs.json.loads',side_effect=lambda raw:decoder.decode(raw.decode() if isinstance(raw,bytes) else raw)),patch('backup_jobs.pid_alive',return_value=False):
+            self.assertEqual(request_status(self.store,self.root,'request-123')['state'],'failed')
+            self.assertEqual(list_backups(self.root,self.store)['jobs'],[])
+
+    def test_binary_filename_cannot_break_backup_listing(self):
+        archive,status=self.prepare()
+        with self.store.connect() as c:c.execute('UPDATE backup_requests SET file=?',(b'\xff',))
+        self.assertEqual(list_backups(self.root,self.store),{'files':[],'jobs':[]})
+
+    def test_nested_status_message_cannot_break_readback(self):
+        archive,status=self.prepare();raw='{"state":"failed","message":'+'['*1200+'0'+']'*1200+'}';status.write_text(raw)
+        with patch('backup_jobs.pid_alive',return_value=False):self.assertEqual(request_status(self.store,self.root,'request-123')['state'],'failed')
+        self.assertEqual(list_backups(self.root,self.store)['jobs'],[]);self.assertEqual(status.read_text(),raw)

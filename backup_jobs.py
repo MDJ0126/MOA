@@ -43,16 +43,27 @@ def _read_status(path,folder):
         raw=stream.read(4097)
     if len(raw)>4096:raise ValueError('백업 상태 파일 크기가 제한을 넘었습니다.')
     try:value=json.loads(raw)
-    except (ValueError,UnicodeError):return None
-    return value if isinstance(value,dict) and value.get('state') in ('waiting','completed','failed') else None
+    except (ValueError,UnicodeError,RecursionError):return None
+    return value if isinstance(value,dict) and value.get('state') in ('waiting','completed','failed') and isinstance(value.get('message',''),str) else None
 
 
 def _alive(pid):
     return type(pid) is int and 0<pid<=0xffffffff and pid_alive(pid)
 
 
-def list_backups(root):
-    folder=Path(root).resolve()/'backups';files=[];jobs=[]
+def _current_status(value,row):
+    if value is None:return None
+    if 'helper_pid' in value:
+        pid=value['helper_pid']
+        if type(pid) is not int or not 0<pid<=0xffffffff or pid!=row['helper_pid']:return None
+    return value
+
+
+def list_backups(root,store=None):
+    folder=Path(root).resolve()/'backups';files=[];jobs=[];attempts={}
+    if store is not None:
+        with store.connect() as connection:
+            attempts={row['file'].removesuffix('.zip')+'.status.json':dict(row) for row in connection.execute('SELECT file,helper_pid FROM backup_requests') if isinstance(row['file'],str)}
     if folder.resolve()!=folder:return {'files':files,'jobs':jobs}
     for path in sorted(folder.glob('*.zip')):
         try:
@@ -61,6 +72,7 @@ def list_backups(root):
     for path in sorted(folder.glob('*.status.json'),reverse=True)[:20]:
         try:
             value=_read_status(path,folder)
+            if path.name in attempts:value=_current_status(value,attempts[path.name])
             if value is None:continue
             if value['state']=='completed' and path.name.removesuffix('.status.json')+'.zip' not in files:continue
             jobs.append({'file':path.name,'state':value['state'],'message':str(value.get('message',''))[:300]})
@@ -76,7 +88,7 @@ def request_status(store, root, key):
     result=dict(row); folder=_folder(root)
     if result['file']!='workspace-'+hashlib.sha256(key.encode()).hexdigest()+'.zip':raise ValueError('백업 요청 기록의 파일명이 올바르지 않습니다.')
     archive=folder/result['file'];have_archive=_entry(archive,folder) is not None
-    status=folder/Path(result['file']).with_suffix('.status.json');value=_read_status(status,folder)
+    status=folder/Path(result['file']).with_suffix('.status.json');value=_current_status(_read_status(status,folder),result)
     if value is not None:
         result['state']=value['state'];result['message']=str(value.get('message',''))[:300]
         if type(value.get('helper_pid')) is int:result['helper_pid']=value['helper_pid']
@@ -99,7 +111,7 @@ def schedule_request(store, root, key, parent_pid, launch=None):
         row=dict(c.execute('SELECT * FROM backup_requests WHERE request_key=?',(key,)).fetchone())
         if row['file']!=filename:raise ValueError('백업 요청 기록의 파일명이 올바르지 않습니다.')
         archive=folder/filename;have_archive=_entry(archive,folder) is not None
-        status=folder/Path(filename).with_suffix('.status.json');value=_read_status(status,folder)
+        status=folder/Path(filename).with_suffix('.status.json');value=_current_status(_read_status(status,folder),row)
         if value is not None:
             if value['state']=='completed' and have_archive:
                 c.execute("UPDATE backup_requests SET state='completed' WHERE request_key=?",(key,))

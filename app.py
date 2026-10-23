@@ -747,7 +747,7 @@ def serve(root, port, model, url,demo_only=False):
                 except OSError:self.send(503,{'error':'백업 파일에 접근하지 못했습니다. 사용 상태와 폴더 권한을 확인하세요.'});return
                 self.send(200,result) if result else self.send(404,{'error':'아직 접수되지 않은 백업 요청입니다.'})
             elif self.path=='/api/backups':
-                self.send(200,list_backups(ROOT))
+                self.send(200,list_backups(ROOT,store))
             elif self.path=='/api/vbox/setup':
                 self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None),'installation':read_setting(store,'vbox_installation',None),'restoration':vbox_setup.restoration_status(store)})
             elif self.path=='/api/setup':
