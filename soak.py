@@ -16,7 +16,7 @@ import zipfile
 from supervisor import ManagedChild,acquire,write_status
 
 ROOT=Path(__file__).resolve().parent
-MODULES=('vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
+MODULES=('private_files','vbox_install','vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
 
 
 def freeze(destination):

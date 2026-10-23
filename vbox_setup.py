@@ -238,7 +238,7 @@ def prepare(store,vm,plan_id):
 
 def _recovery_state(store):
     with store.connect() as c:
-        rows={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")}
+        rows={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")}
     return rows
 
 def _check_recovery(rows):
@@ -257,6 +257,8 @@ def _check_recovery(rows):
             if value.get('id')!=uid or value.get('name')!=name or value.get('root')!=str(ROOT.resolve()) or value.get('host')!=identity():raise ValueError('다른 프로젝트·호스트이거나 손상된 준비 기록입니다. 자동 정리하지 않습니다.')
             if value.get('runtime_owner')!=owner:raise ValueError('runtime 소유 표식이 일치하지 않습니다. 자동 정리하지 않습니다.')
         if record.get('state') not in ('preparing','prepared','interrupted'):raise ValueError('준비 상태를 확인하지 못했습니다.')
+        installation=json.loads(rows.get('vbox_installation','{}'))
+        if not isinstance(installation,dict) or installation and installation.get('plan_id')!=uid:raise ValueError('다른 VM의 설치 기록입니다. 자동 정리하지 않습니다.')
         folder=ROOT/'runtime/vbox'
         if folder.resolve()!=ROOT.resolve()/'runtime/vbox':raise ValueError('VM 저장 폴더가 프로젝트 밖을 가리킵니다.')
         target=folder/name
@@ -294,9 +296,9 @@ def clear_preparation(store,vm,record_id,request_key):
         if not check['can_clear'] or check['record_id']!=record_id:raise ValueError(check['reason'])
         with store.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            current={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")}
+            current={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")}
             if current!=before:raise ValueError('확인 중 준비 기록이 바뀌었습니다. 다시 확인하세요.')
             c.execute('CREATE TABLE IF NOT EXISTS vbox_recovery_audit(request_key TEXT PRIMARY KEY,record_id TEXT NOT NULL,snapshot TEXT NOT NULL,created REAL NOT NULL)')
             c.execute('INSERT INTO vbox_recovery_audit VALUES(?,?,?,?)',(request_key,record_id,json.dumps(before,ensure_ascii=False),time.time()))
-            c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")
+            c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")
         return {'cleared':True,'record_id':record_id,'replayed':False}

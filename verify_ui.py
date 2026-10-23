@@ -36,5 +36,8 @@ with tempfile.TemporaryDirectory(dir=root) as data:
         vbox=subprocess.run([str(node),'test_vbox_setup.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(vbox.stdout);print(vbox.stderr)
         if vbox.returncode:raise SystemExit(vbox.returncode)
+        install=subprocess.run([str(node),'test_vbox_install.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        print(install.stdout);print(install.stderr)
+        if install.returncode:raise SystemExit(install.returncode)
     finally:
         process.terminate();process.wait(timeout=10)

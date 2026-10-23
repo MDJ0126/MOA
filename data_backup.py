@@ -60,7 +60,7 @@ def backup(source, output):
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
                 for path in sorted(source.rglob('*')):
                     relative = path.relative_to(source)
-                    if relative.parts[0].casefold() == 'vm' or relative.as_posix().casefold() in SKIP:
+                    if relative.parts[0].casefold() == 'vm' or 'vbox-private' in tuple(p.casefold() for p in relative.parts) or relative.as_posix().casefold() in SKIP:
                         continue
                     if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
                         raise ValueError('링크가 포함된 데이터는 백업하지 않습니다.')
@@ -116,7 +116,7 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                     raise ValueError('잘못된 백업 파일 정보입니다.')
                 parts = PurePosixPath(name).parts
                 reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in range(1, 10)}
-                if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold() == 'vm':
+                if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold() == 'vm' or 'vbox-private' in tuple(p.casefold() for p in parts):
                     raise ValueError('잘못된 백업 경로입니다.')
                 for i in range(1,len(parts)+1):
                     prefix='/'.join(parts[:i]);folded=prefix.casefold()
