@@ -33,6 +33,13 @@ class BusyBackup(ValueError):pass
 def _inside(path, parent):
     return path == parent or parent in path.parents
 
+def manifest_object(pairs):
+    value={}
+    for key,item in pairs:
+        if key in value:raise ValueError('백업 목록의 JSON 키가 중복됩니다.')
+        value[key]=item
+    return value
+
 
 def backup(source, output):
     source, output = Path(source).resolve(), Path(output).resolve()
@@ -102,8 +109,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 raise ValueError('중복 파일 또는 복원 크기 제한 초과입니다.')
             if z.getinfo('manifest.json').file_size > 16 * 1024**2:
                 raise ValueError('백업 목록이 너무 큽니다.')
-            manifest = json.loads(z.read('manifest.json'))
-            if not isinstance(manifest, dict) or manifest.get('version') != 1 or not isinstance(manifest.get('files'), dict):
+            manifest = json.loads(z.read('manifest.json'),object_pairs_hook=manifest_object)
+            if not isinstance(manifest, dict) or type(manifest.get('version')) is not int or manifest['version'] != 1 or not isinstance(manifest.get('files'), dict):
                 raise ValueError('지원하지 않는 백업입니다.')
             files = manifest['files']
             if len({name.casefold() for name in files}) != len(files):
