@@ -48,7 +48,7 @@ def run_checks(folder, acceptance='', timeout=30):
             result_file=Path(temporary)/'result.json';acceptance_file=''
             if acceptance:
                 spec=Path(temporary)/'acceptance.py';spec.write_text(acceptance,encoding='utf-8');acceptance_file=str(spec)
-            run=execute([sys.executable,'-I','-c',RUNNER,str(folder),acceptance_file,str(result_file)],folder,timeout)
+            run=execute([sys.executable,'-I','-B','-c',RUNNER,str(folder),acceptance_file,str(result_file)],folder,timeout)
             if run['timed_out'] or run['returncode']!=0:
                 return {'passed':False,'tests_run':0,'output':(run['stderr'] or run['stdout'])[-20000:],
                         'errors':[f'Python 검증 제한 시간 초과 ({timeout}초). 검증 프로세스를 정리했습니다.' if run['timed_out'] else 'Python 검증 프로세스가 결과를 저장하기 전에 종료되었습니다.'],
