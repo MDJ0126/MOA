@@ -50,3 +50,20 @@ class ArtifactTests(unittest.TestCase):
         os.link(secret,folder/'workspace/shared.txt')
         with self.assertRaisesRegex(ValueError,'하드링크'):Worker(self.store).package(self.tid,'failed')
         self.assertEqual((folder/'artifacts.zip').read_bytes(),old)
+
+    def test_uncommitted_or_tampered_report_is_not_served(self):
+        import json
+        report=self.store.root/'tasks'/self.tid/'report.md';report.write_text('changed after publication',encoding='utf-8')
+        with self.assertRaises(ArtifactMissing):
+            with open_artifact(self.store.root,self.tid,'report.md',self.plan):pass
+        self.assertNotIn('report.md',{item['name'] for item in metadata(self.store.root,self.tid,self.plan)['files']})
+        with self.store.connect() as c:c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=?",(self.tid,))
+        self.assertEqual(metadata(self.store.root,self.tid,self.plan)['files'],[])
+    def test_legacy_reports_remain_readable_but_bad_receipts_fail_closed(self):
+        import json
+        with self.store.connect() as c:c.execute('UPDATE tasks SET artifact_publication=NULL WHERE id=?',(self.tid,))
+        with open_artifact(self.store.root,self.tid,'report.json',self.plan) as (stream,info):self.assertGreater(info.st_size,0)
+        for value in ('not JSON',json.dumps({'report_id':'a'*32,'files':[]})):
+            with self.store.connect() as c:c.execute('UPDATE tasks SET artifact_publication=? WHERE id=?',(value,self.tid))
+            with self.assertRaises(ArtifactMissing):
+                with open_artifact(self.store.root,self.tid,'report.json',self.plan):pass

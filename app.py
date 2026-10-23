@@ -1,6 +1,6 @@
 """Local sequential agents. Standard library only; no desktop control."""
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager,nullcontext
 import hashlib
 import json
 import os
@@ -84,7 +84,7 @@ class Store:
             columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
             for name,definition in {'revision':'INTEGER DEFAULT 0','max_revisions':'INTEGER DEFAULT 2',
                     'acceptance':"TEXT DEFAULT ''",'verification':"TEXT DEFAULT '{}'",'retry_at':'REAL DEFAULT 0',
-                    'wait_reason':"TEXT DEFAULT ''",'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER'}.items():
+                    'wait_reason':"TEXT DEFAULT ''",'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER','artifact_publication':'TEXT'}.items():
                 if name not in columns:c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.execute('UPDATE tasks SET revision_budget=MIN(5,max_revisions) WHERE revision_budget IS NULL')
             message_columns={r[1] for r in c.execute('PRAGMA table_info(messages)')}
@@ -175,6 +175,7 @@ class Store:
                   (tid, title, mode, 'queued', time.time(),acceptance,int(max_revisions),int(auto_recover),json.dumps(required_files or []),json.dumps(plan,ensure_ascii=False),source_key))
             if fingerprint:c.execute('UPDATE tasks SET request_fingerprint=? WHERE id=?',(fingerprint,tid))
             c.execute('UPDATE tasks SET revision_budget=? WHERE id=?',(int(max_revisions),tid))
+            c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=?",(tid,))
             if slack_context:
                 c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_context['channel'],slack_context['thread_ts'],slack_context['connection_id']))
             slack_config=read_setting(self,'slack',{})
@@ -215,7 +216,7 @@ class Store:
                     source=folder/name
                     if source.is_file():
                         archive.mkdir(parents=True,exist_ok=True);shutil.copy2(source,archive/name)
-                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',wait_reason='',failures=0,retry_at=0 WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
+                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',wait_reason='',failures=0,retry_at=0,artifact_publication='{}' WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
             elif action == 'cancel':
                 if c.execute("UPDATE tasks SET status='cancelled',wait_reason='' WHERE id=? AND status IN ('queued','running','failed','interrupted')", (tid,)).rowcount != 1:
                     raise ValueError('취소 가능한 작업이 없습니다.')
@@ -384,11 +385,14 @@ class Worker:
                 retry=not blocked and row['auto_recover'] and row['failures']<3
                 c.execute("UPDATE tasks SET status=?,failures=failures+?,error=?,wait_reason='' WHERE id=?",('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
 
-    def package(self, tid, status, verification=None):
+    def package(self, tid, status, verification=None,*,_connection=None):
         s=self.store
-        with s.connect() as c:
+        with (nullcontext(_connection) if _connection is not None else s.connect()) as c:
             task=dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
             rows=[dict(r) for r in c.execute('SELECT * FROM messages WHERE task_id=? ORDER BY seq',(tid,))]
+        if task['artifact_publication'] is None:
+            if _connection is not None:raise ValueError('구형 보고서는 실행 단계에서 발행 확인을 준비해야 합니다.')
+            with s._write_transaction() as c:c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=? AND artifact_publication IS NULL",(tid,))
         folder=s.root/'tasks'/tid
         workspace=(folder/'workspace').absolute()
         manifest={'task_id':tid,'title':task['title'],'mode':task['mode'],'status':status,'report_id':uuid.uuid4().hex,'error':task['error'],
@@ -412,7 +416,9 @@ class Worker:
         hashes=manifest['verification'].get('source_hashes')
         manifest['verification_matches_files']=hashes=={item['path']:item['sha256'] for item in manifest['files']} if isinstance(hashes,dict) else None
         if status=='completed' and manifest['verification_matches_files'] is False:raise ValueError('검증 후 파일이 변경되어 완료 보고서를 발행하지 않습니다.')
-        publish(folder,workspace,manifest)
+        publication=publish(folder,workspace,manifest)
+        with s._write_transaction(_connection) as c:
+            c.execute('UPDATE tasks SET artifact_publication=? WHERE id=?',(json.dumps(publication,ensure_ascii=False),tid))
 
     def checkpoint(self,tid,stage,revision,files):
         folder=files.folder.parent/'checkpoints'/f'r{revision}-{stage}'
@@ -448,6 +454,7 @@ class Worker:
                     c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(task['id'],'system','error',message,time.time()))
                 return True
             if c.execute("UPDATE tasks SET status='running' WHERE id=? AND status='queued'", (task['id'],)).rowcount!=1:return True
+            c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=? AND artifact_publication IS NULL",(task['id'],))
         tid = task['id']
         pipeline=plan['pipeline'];assignment=plan['assignment']
         role=None
@@ -509,15 +516,20 @@ class Worker:
                             if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result,_connection=c):return True
                             c.execute("UPDATE tasks SET status='queued',stage=?,revision=revision+1,error='검증 실패: 자동 수정 대기' WHERE id=? AND status='running'",(pipeline.index('developer'),tid))
                         return True
-                    if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result):return True
-                    raise RuntimeError('검증 실패: 최대 수정 회차에 도달했습니다.')
+                    with s._write_transaction() as c:
+                        if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result,_connection=c):return True
+                        message='검증 실패: 최대 수정 회차에 도달했습니다.'
+                        if has_vm_input(plan,role):message+=' VM 입력이 있는 단계입니다. 수동 재개 전에 게스트 상태를 확인하세요.'
+                        c.execute("UPDATE tasks SET status='failed',error=?,failures=failures+1,retry_at=0 WHERE id=? AND status='running'",(message,tid))
+                        c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','error',message,time.time()))
+                        self.package(tid,'failed',task.get('verification'),_connection=c)
+                    return True
                 recipient=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
                 if stage<len(pipeline)-1:
                     with s._write_transaction() as c:
                         if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
                         c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'",(stage+1,tid))
                     continue
-                if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result):return True
                 if stage==len(pipeline)-1:
                     if task['verification'].get('source_hashes')!=self.file_hashes(files):
                         with s.connect() as c:c.execute("UPDATE tasks SET stage=?,status='queued',error='보고 중 소스 변경: 재검증 필요' WHERE id=? AND status='running'",(pipeline.index('reviewer'),tid))
@@ -525,7 +537,8 @@ class Worker:
                     with s.connect() as c:
                         c.execute('BEGIN IMMEDIATE')
                         if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
-                        self.package(tid,'completed',task.get('verification'))
+                        if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
+                        self.package(tid,'completed',task.get('verification'),_connection=c)
                         c.execute("UPDATE tasks SET stage=?,status='completed',error='' WHERE id=?",(len(pipeline),tid))
                     return True
             return True
@@ -564,7 +577,7 @@ class Worker:
             if not retry:
                 with s.connect() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]=='failed':self.package(tid,'failed',task.get('verification') if isinstance(task.get('verification'),dict) else None)
+                    if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]=='failed':self.package(tid,'failed',task.get('verification') if isinstance(task.get('verification'),dict) else None,_connection=c)
             return True
 
     def loop(self):

@@ -67,11 +67,11 @@ class ReportTests(unittest.TestCase):
 
     def test_file_changed_after_verification_is_reported_as_unverified(self):
         tid=self.store.add('change after checks','demo');worker=Worker(self.store);package=worker.package
-        def changed(task_id,status,*args):
+        def changed(task_id,status,*args,**kwargs):
             if status=='completed':
                 workspace=Path(self.temp.name)/'tasks'/task_id/'workspace'
                 next(workspace.iterdir()).write_text('changed after verification',encoding='utf-8')
-            return package(task_id,status,*args)
+            return package(task_id,status,*args,**kwargs)
         with patch.object(worker,'package',side_effect=changed):worker.tick()
         folder=Path(self.temp.name)/'tasks'/tid
         report=json.loads((folder/'report.json').read_text(encoding='utf-8'))

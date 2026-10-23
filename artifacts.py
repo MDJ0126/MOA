@@ -1,5 +1,8 @@
 """Bounded-memory delivery of allowlisted task artifacts."""
-from contextlib import contextmanager
+from contextlib import contextmanager,closing
+import hashlib
+import json
+import sqlite3
 import os
 from pathlib import Path,PurePosixPath
 import re
@@ -31,12 +34,35 @@ def location(root,tid,name,plan):
     return target,info
 
 
+def publication_entry(root,tid,name):
+    if name.startswith('vm/'):return None
+    database=Path(root).resolve()/'state.sqlite3'
+    if not database.is_file():return None
+    try:
+        with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,timeout=5)) as c:
+            columns={row[1] for row in c.execute('PRAGMA table_info(tasks)')}
+            if 'artifact_publication' not in columns:return None
+            row=c.execute('SELECT artifact_publication FROM tasks WHERE id=?',(tid,)).fetchone()
+        if row is None:raise ArtifactMissing()
+        if row[0] is None:return None # Legacy reports predate publication receipts.
+        value=json.loads(row[0])
+        if not isinstance(value,dict) or not isinstance(value.get('files'),dict):raise ArtifactMissing()
+        entry=value['files'].get(name)
+        if not isinstance(value,dict) or not re.fullmatch('[0-9a-f]{32}',str(value.get('report_id',''))) or not isinstance(entry,dict) or type(entry.get('bytes')) is not int or entry['bytes']<0 or not isinstance(entry.get('sha256'),str) or not re.fullmatch('[0-9a-f]{64}',entry['sha256']):raise ArtifactMissing()
+        return entry
+    except (sqlite3.Error,ValueError,TypeError):raise ArtifactMissing() from None
+
+
 @contextmanager
 def open_artifact(root,tid,name,plan):
     path,_=location(root,tid,name,plan)
+    expected=publication_entry(root,tid,name)
     with path.open('rb') as stream:
         current,now=location(root,tid,name,plan);opened=os.fstat(stream.fileno())
         if (opened.st_dev,opened.st_ino)!=(now.st_dev,now.st_ino) or not stat.S_ISREG(opened.st_mode) or opened.st_nlink!=1:raise ArtifactMissing()
+        if expected is not None:
+            if opened.st_size!=expected['bytes'] or hashlib.file_digest(stream,'sha256').hexdigest()!=expected['sha256']:raise ArtifactMissing()
+            stream.seek(0)
         yield stream,opened
 
 

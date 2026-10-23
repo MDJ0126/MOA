@@ -115,8 +115,15 @@ def publish(folder,workspace,report):
         with zipfile.ZipFile(staged/'artifacts.zip','w',zipfile.ZIP_DEFLATED) as bundle:
             for source in sorted(staged.rglob('*')):
                 if source.is_file() and source!=staged/'artifacts.zip':bundle.write(source,source.relative_to(staged).as_posix())
+        publication={'report_id':report['report_id'],'files':{}}
+        for source in staged.rglob('*'):
+            if not source.is_file():continue
+            name=source.relative_to(staged).as_posix()
+            if name.split('/')[0] in ('workspace','vm'):continue
+            publication['files'][name]={'bytes':source.stat().st_size,'sha256':hash_file(source)}
         # Build and hash-check the complete snapshot before exposing any new reports.
         for source in sorted(staged.rglob('*')):
             if not source.is_file() or source==staged/'artifacts.zip' or source.relative_to(staged).parts[0] in ('workspace','vm'):continue
             destination=folder/source.relative_to(staged);destination.parent.mkdir(parents=True,exist_ok=True);_replace(source,destination)
         _replace(staged/'artifacts.zip',folder/'artifacts.zip')
+        return publication
