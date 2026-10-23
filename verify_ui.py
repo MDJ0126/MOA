@@ -42,5 +42,8 @@ with tempfile.TemporaryDirectory(dir=root) as data:
         startup=subprocess.run([str(node),'test_startup_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(startup.stdout);print(startup.stderr)
         if startup.returncode:raise SystemExit(startup.returncode)
+        recovery=subprocess.run([str(node),'test_team_recovery.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        print(recovery.stdout);print(recovery.stderr)
+        if recovery.returncode:raise SystemExit(recovery.returncode)
     finally:
         process.terminate();process.wait(timeout=10)

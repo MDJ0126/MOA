@@ -2,7 +2,9 @@
 import copy
 import base64
 import ctypes
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -25,6 +27,20 @@ LOCK=threading.RLock()
 
 class SettingsConflict(ValueError):pass
 
+TEAM_ERRORS=(ValueError,TypeError,KeyError,OverflowError,RecursionError)
+
+def team_recovery_token(raw):
+    digest=hashlib.sha256();digest.update(type(raw).__name__.encode());digest.update(b'\0')
+    digest.update(raw if isinstance(raw,bytes) else str(raw).encode('utf-8','surrogatepass'))
+    return digest.hexdigest()
+
+def decode_team(raw):
+    value=json.loads(raw);validate_team(value)
+    revision=value.get('updated',0)
+    if type(revision) not in (int,float) or not math.isfinite(revision) or revision<0:raise ValueError('팀 설정 버전 오류')
+    if 'configured' in value and type(value['configured']) is not bool:raise ValueError('팀 설정 상태 오류')
+    return value
+
 def check_revision(current,value):
     expected=value.get('expected_updated')
     if expected is not None and expected!=current.get('updated',0):
@@ -34,7 +50,17 @@ def checked_write_setting(store,key,clean,value):
     with store.connect() as c:
         c.execute('BEGIN IMMEDIATE')
         row=c.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
-        current=json.loads(row[0]) if row else {}
+        if key=='workspace':
+            try:current=decode_team(row[0]) if row else {}
+            except TEAM_ERRORS:
+                token=team_recovery_token(row[0])
+                if value.get('recovery_token')!=token:raise SettingsConflict('손상된 팀 설정이 변경되었습니다. 최신 설정을 확인한 뒤 다시 저장하세요.') from None
+                c.execute('CREATE TABLE IF NOT EXISTS settings_recovery_archive(id INTEGER PRIMARY KEY,key TEXT NOT NULL,value,token TEXT NOT NULL,created REAL NOT NULL)')
+                c.execute('INSERT INTO settings_recovery_archive(key,value,token,created) VALUES(?,?,?,?)',(key,row[0],token,time.time()))
+                current={}
+            else:
+                if value.get('recovery_token') is not None:raise SettingsConflict('팀 설정이 이미 변경되었습니다. 최신 설정을 확인한 뒤 다시 저장하세요.')
+        else:current=json.loads(row[0]) if row else {}
         check_revision(current,value)
         clean['updated']=max(clean.get('updated',time.time()),current.get('updated',0)+.000001)
         if key=='workspace':
@@ -53,7 +79,11 @@ def write_setting(store,key,value):
     with store.connect() as c:c.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(value,ensure_ascii=False)))
 
 def team_settings(store):
-    return read_setting(store,'workspace',{'configured':False,'preset':'standard','agents':DEFAULT_AGENTS,'pipeline':list(CAPABILITIES),'max_revisions':2})
+    default={'configured':False,'preset':'standard','agents':copy.deepcopy(DEFAULT_AGENTS),'pipeline':list(CAPABILITIES),'max_revisions':2}
+    with store.connect() as c:row=c.execute("SELECT value FROM settings WHERE key='workspace'").fetchone()
+    if not row:return default
+    try:return decode_team(row[0])
+    except TEAM_ERRORS:return {**default,'recovery_required':True,'recovery_token':team_recovery_token(row[0]),'recovery_message':'저장된 팀 설정을 읽지 못했습니다. 구성을 확인하고 저장하면 원문을 보관하고 복구합니다.'}
 
 def validate_team(value):
     if not isinstance(value,dict):raise ValueError('팀 설정 객체가 필요합니다.')
@@ -88,6 +118,7 @@ def save_team(store,value):
 
 def make_plan(store,tid):
     setup=team_settings(store)
+    if setup.get('recovery_required'):raise ValueError('팀 설정을 확인하고 저장한 뒤 새 작업을 맡겨 주세요. 기존 작업의 팀 구성은 유지됩니다.')
     assignment={};load={a['id']:0 for a in setup['agents']}
     for role in setup['pipeline']:
         candidates=[a for a in setup['agents'] if role in a['capabilities']]
