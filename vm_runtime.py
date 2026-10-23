@@ -354,6 +354,7 @@ class VM:
                     if action['role']!=role:continue
                     if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
                     self.action(action);self.store.log(task['id'],actor,'vm_action',json.dumps(action,ensure_ascii=False))
+                if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
                 yield
                 if active():self.capture(folder/(stamp+'-after.png'))
             except Exception:

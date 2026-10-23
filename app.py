@@ -575,6 +575,9 @@ class Worker:
                         raise StageDeferred()
                     s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})',capability=role)
                 with self.vm.stage(task,role,actor,before=prepare_stage):
+                    with s.connect() as c:
+                        current=c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()
+                        if not current or current[0]!='running':raise StageDeferred()
                     result = backend.run(task, role, history, files, lambda kind, text: s.log(tid, actor, kind, text,capability=role))
                 with s.connect() as c:
                     if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':
