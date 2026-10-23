@@ -6,8 +6,9 @@ import signal
 import secrets
 import subprocess
 import sys
+import socket
 import time
-import urllib.request
+from app_lifecycle import request_stop
 
 ROOT=Path(__file__).resolve().parent
 
@@ -86,46 +87,52 @@ class ManagedChild:
                 except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=5)
         finally:self.release_logs()
 
+def check_ports(ports=(8765,8766)):
+    for port in ports:
+        with socket.socket() as candidate:
+            if hasattr(socket,'SO_EXCLUSIVEADDRUSE'):candidate.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
+            try:candidate.bind(('127.0.0.1',port))
+            except OSError:raise RuntimeError('127.0.0.1:'+str(port)+' 포트를 열 수 없습니다. 기존 앱을 해당 프로젝트에서 종료하거나 다른 포트를 선택하세요. 자동 재사용하지 않습니다.') from None
+
+
 def main():
     config=json.loads((ROOT/'config.json').read_text(encoding='utf-8'))
     data=ROOT/'data';data.mkdir(exist_ok=True)
-    lock=acquire(data/'supervisor.lock')
-    stop=data/'supervisor.stop'
-    stop.unlink(missing_ok=True)
-    runtime=ROOT/config['runtime_executable'];model=ROOT/config['model_file']
-    if not runtime.exists() or not model.exists():raise RuntimeError('로컬 모델을 먼저 install_model.py로 설치하세요.')
-    keyfile=data/'model.key'
-    if not keyfile.exists():keyfile.write_text(secrets.token_urlsafe(32),encoding='utf-8')
-    commands={
-        'model':[str(runtime),'-m',str(model),'--host','127.0.0.1','--port','8766','--ctx-size',str(config['context_size']),
-                 '--parallel','1','--threads',str(config['threads']),'--gpu-layers','0','--alias',config['model'],
-                 '--cache-ram','64','--sleep-idle-seconds','30','--api-key-file',str(keyfile)],
-        'app':[sys.executable,'-u',str(ROOT/'app.py'),'--model',config['model'],'--model-url',config['model_url']],
-    }
-    children={name:ManagedChild(name,command,ROOT,data) for name,command in commands.items()}
-    started=time.time()
-    def shutdown(*args):stop.touch()
-    signal.signal(signal.SIGINT,shutdown);signal.signal(signal.SIGTERM,shutdown)
-    print('모델·순차 작업 관리자 감시 시작: http://127.0.0.1:8765',flush=True)
-    try:
-        while not stop.exists():
-            for name,child in children.items():
-                if child.step()==0 and name=='app':stop.touch();break
-            status={'pid':os.getpid(),'started':started,'updated':time.time(),'restarts':{n:c.restarts for n,c in children.items()},
-                    'children':{name:child.status() for name,child in children.items()}}
-            write_status(data/'supervisor.json',status)
-            time.sleep(1)
-    finally:
-        # Only processes created by this supervisor are stopped.
-        app=children['app'].process
-        if app is not None and app.poll() is None:
-            try:
-                req=urllib.request.Request('http://127.0.0.1:8765/api/control',b'{"action":"shutdown"}',
-                                           {'Content-Type':'application/json','X-Local-Agent':'1'})
-                with urllib.request.urlopen(req,timeout=3):pass
-                app.wait(timeout=250)
-            except Exception:pass
-        for child in children.values():child.close()
-        lock.close()
+    with acquire(data/'supervisor.lock'):
+        stop=data/'supervisor.stop'
+        check_ports()
+        stop.unlink(missing_ok=True)
+        runtime=ROOT/config['runtime_executable'];model=ROOT/config['model_file']
+        if not runtime.exists() or not model.exists():raise RuntimeError('로컬 모델을 먼저 install_model.py로 설치하세요.')
+        keyfile=data/'model.key'
+        if not keyfile.exists():keyfile.write_text(secrets.token_urlsafe(32),encoding='utf-8')
+        commands={
+            'model':[str(runtime),'-m',str(model),'--host','127.0.0.1','--port','8766','--ctx-size',str(config['context_size']),
+                     '--parallel','1','--threads',str(config['threads']),'--gpu-layers','0','--alias',config['model'],
+                     '--cache-ram','64','--sleep-idle-seconds','30','--api-key-file',str(keyfile)],
+            'app':[sys.executable,'-u',str(ROOT/'app.py'),'--model',config['model'],'--model-url',config['model_url']],
+        }
+        children={name:ManagedChild(name,command,ROOT,data) for name,command in commands.items()}
+        started=time.time()
+        def shutdown(*args):stop.touch()
+        signal.signal(signal.SIGINT,shutdown);signal.signal(signal.SIGTERM,shutdown)
+        print('모델·순차 작업 관리자 감시 시작: http://127.0.0.1:8765',flush=True)
+        try:
+            while not stop.exists():
+                for name,child in children.items():
+                    if child.step()==0 and name=='app':stop.touch();break
+                status={'pid':os.getpid(),'started':started,'updated':time.time(),'restarts':{n:c.restarts for n,c in children.items()},
+                        'children':{name:child.status() for name,child in children.items()}}
+                write_status(data/'supervisor.json',status)
+                time.sleep(1)
+        finally:
+            # Only processes created by this supervisor are stopped.
+            app=children['app'].process
+            if app is not None and app.poll() is None:
+                try:
+                    request_stop(ROOT,8765,expected_pid=app.pid)
+                    app.wait(timeout=250)
+                except Exception:pass
+            for child in children.values():child.close()
 
 if __name__=='__main__':main()

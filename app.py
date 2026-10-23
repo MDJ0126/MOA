@@ -30,6 +30,7 @@ from slack_service import SlackService,test_connection,SDK_AVAILABLE
 import environment_profiles
 import vbox_setup
 import vbox_install
+import app_lifecycle
 from vm_runtime import VM,BusyVM,VMAdmissionBusy,settings as vm_settings,validate_actions
 
 ROOT = Path(__file__).resolve().parent
@@ -689,10 +690,8 @@ def serve(root, port, model, url,demo_only=False):
     else:
         import fcntl
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    worker.recover()
     slack=SlackService(store)
     slack_thread=threading.Thread(target=(lambda:None) if demo_only else slack.loop,daemon=True)
-    slack_thread.start()
     maintenance_lock=threading.Lock()
     maintenance={'backup':None}
     class Handler(BaseHTTPRequestHandler):
@@ -949,16 +948,37 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(503,{'error':'로컬 저장소에 접근하지 못했습니다. 현재 Windows 사용자와 폴더 권한을 확인하세요.'})
         def log_message(self, *args):
             pass
-    server = ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    server=None;registration=None;monitor_stop=threading.Event();monitor=None
     thread = threading.Thread(target=worker.loop, daemon=True)
-    thread.start()
-    print(f'Local agents: http://127.0.0.1:{port} | model={model or "unset"}', flush=True)
     try:
+        # Bind before recovery or external receive loops can have any effects.
+        server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+        registration=app_lifecycle.register(ROOT,port,instance)
+        worker.recover();slack_thread.start();thread.start()
+        def watch_stop():
+            while not monitor_stop.wait(.2):
+                try:requested=app_lifecycle.stop_requested(ROOT,registration)
+                except (OSError,ValueError):continue
+                if requested:
+                    worker.stop.set()
+                    try:store.control('pause')
+                    except (OSError,sqlite3.Error):pass
+                    server.shutdown();return
+        monitor=threading.Thread(target=watch_stop,daemon=True);monitor.start()
+        print(f'Local agents: http://127.0.0.1:{port} | model={model or "unset"}', flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        worker.stop.set();slack.stop.set(); server.server_close(); thread.join(timeout=250);slack_thread.join(timeout=15); lock.close()
+        monitor_stop.set();worker.stop.set();slack.stop.set()
+        if registration is not None:
+            try:app_lifecycle.unregister(ROOT,registration)
+            except (OSError,ValueError):pass
+        if server is not None:server.server_close()
+        if thread.ident is not None:thread.join(timeout=250)
+        if slack_thread.ident is not None:slack_thread.join(timeout=15)
+        if monitor is not None:monitor.join(timeout=2)
+        lock.close()
 
 
 if __name__ == '__main__':

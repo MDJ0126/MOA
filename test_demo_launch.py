@@ -63,7 +63,9 @@ class DemoLaunchTests(unittest.TestCase):
             else:self.fail('demo task did not complete')
             report=json.loads((self.project/'data-demo'/'tasks'/tid/'report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['mode'],'demo');self.assertEqual(report['verification']['tests_run'],0)
-            for name in ('models','runtime','data'):self.assertFalse((self.project/name).exists(),name)
+            for name in ('models','data'):self.assertFalse((self.project/name).exists(),name)
+            self.assertEqual({path.name for path in (self.project/'runtime').iterdir()},{'app-'+str(request.port)+'.json'})
+            record=json.loads((self.project/'runtime'/('app-'+str(request.port)+'.json')).read_text(encoding='utf-8'));self.assertEqual(record['port'],request.port)
             self.assertFalse((self.project/'data-demo'/'supervisor.json').exists())
 
     def test_demo_api_rejects_actual_model_vm_and_slack(self):
