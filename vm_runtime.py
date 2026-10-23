@@ -126,22 +126,41 @@ class VM:
     def qmp(self,command,arguments=None):
         session=self.session()
         if not session:raise ValueError('공유 VM이 실행 중이 아닙니다.')
+        deadline=time.monotonic()+5
         with socket.create_connection(('127.0.0.1',session['port']),timeout=3) as sock:
-            sock.settimeout(5)
-            stream=sock.makefile('rwb')
+            pending=bytearray()
+            def remaining():
+                seconds=deadline-time.monotonic()
+                if seconds<=0:raise ValueError('VM 제어 응답 대기 시간이 초과되었습니다.')
+                sock.settimeout(seconds)
             def read():
-                line=stream.readline(1024*1024)
-                if not line:raise ValueError('VM 제어 연결이 종료되었습니다.')
-                return json.loads(line)
+                while True:
+                    remaining()
+                    end=pending.find(b'\n')
+                    if end>=0:
+                        if end>=1024*1024:raise ValueError('VM 제어 응답이 너무 큽니다.')
+                        line=bytes(pending[:end]);del pending[:end+1]
+                        try:value=json.loads(line)
+                        except (ValueError,RecursionError) as error:raise ValueError('VM 제어 응답 형식 오류') from error
+                        if not isinstance(value,dict):raise ValueError('VM 제어 응답은 객체여야 합니다.')
+                        return value
+                    if len(pending)>=1024*1024:raise ValueError('VM 제어 응답이 너무 큽니다.')
+                    chunk=sock.recv(min(65536,1024*1024-len(pending)))
+                    if not chunk:raise ValueError('VM 제어 연결이 종료되었습니다.')
+                    pending.extend(chunk)
             def send(name,args=None):
-                stream.write((json.dumps({'execute':name,'arguments':args or {}})+'\n').encode());stream.flush()
+                remaining();sock.sendall((json.dumps({'execute':name,'arguments':args or {}})+'\n').encode())
                 while True:
                     response=read()
-                    if 'error' in response:raise ValueError('VM 응답 오류: '+response['error'].get('desc','unknown'))
+                    if 'error' in response:
+                        error=response['error']
+                        description=error.get('desc') if isinstance(error,dict) else None
+                        raise ValueError('VM 응답 오류: '+(description if isinstance(description,str) else '응답 형식 오류'))
                     if 'return' in response:return response['return']
             if 'QMP' not in read():raise ValueError('QMP 응답이 아닙니다.')
             send('qmp_capabilities')
-            if send('query-name').get('name')!=session['name']:raise ValueError('이 프로젝트의 VM이 아닙니다.')
+            identity=send('query-name')
+            if not isinstance(identity,dict) or identity.get('name')!=session['name']:raise ValueError('이 프로젝트의 VM이 아닙니다.')
             return send(command,arguments)
 
     def owner_record(self):
