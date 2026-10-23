@@ -38,7 +38,7 @@ http://127.0.0.1:8765 에서 워크스페이스·작업과 대화·팀 설정·�
 
 기본 모드는 **실제 AI**입니다. 현재 기본 모델은 Qwen2.5-Coder-7B-Instruct Q4_K_M, 런타임은 llama.cpp b11669 CPU x64입니다. 공식 SHA-256과 대조했으며 출처·크기·해시는 `models/installed.json`에 있습니다. CPU 4스레드, 컨텍스트 4096, 동시 추론 1개이며 GPU 가속은 사용하지 않습니다. 설정은 `config.json`입니다. 앞서 시험한 1.5B 파일과 실패 기록도 보존했습니다.
 
-다시 설치하려면 Python 3.11 이상으로 `install_model.py`를 실행합니다. 모델 약 4.68GB와 런타임 약 20MB를 다운로드하며 시스템 PATH는 변경하지 않습니다. 현재 사용한 Python 경로는 `%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`입니다.
+다시 설치하려면 Python 3.11 이상으로 `install_model.py`를 실행합니다. 모델 약 4.68GB와 런타임 약 20MB를 다운로드하며 시스템 PATH는 변경하지 않습니다.
 
 모델 다운로드가 끊기면 같은 명령을 다시 실행해 `.part` 파일부터 이어받습니다. 서버 범위 응답을 확인하고 공식 SHA-256 검증 후 정식 파일로 교체합니다. 해시가 다른 부분 파일은 제거하며 기존 정식 파일은 보존합니다. 설치 잠금으로 중복 실행을 차단하고 런타임은 파일별로 완성한 뒤 교체합니다. 재설치·수리 전에는 앱과 감시 관리자를 정상 종료하세요. 파일 전체에 대한 일괄 롤백은 제공하지 않으며 실패 후 같은 명령으로 재실행할 수 있습니다.
 
@@ -91,7 +91,7 @@ PC는 i5-12400F / RAM 15.82GiB / GTX 970 4GiB / Windows Core로 확인했습니�
 
 ## 검증
 
-Python으로 `-m unittest -v`, `verify_system.py`를 실행하면 단위/HTTP 검증을 수행합니다. `verify_real.py`는 실행 중인 모델·감시 관리자에 실제 작업을 등록합니다. `verify_recovery.py`는 이 프로젝트의 작업 서버를 실제로 종료시켜 자동 복구를 확인합니다. 컴퓨터 유즈·브라우저 시각 검증은 수행하지 않았습니다.
+Python으로 `-m unittest -v`, `verify_system.py`를 실행하면 단위/HTTP 검증을 수행합니다. `verify_real.py`는 실행 중인 모델·감시 관리자에 실제 작업을 등록합니다. `verify_recovery.py`는 이 프로젝트의 작업 서버를 실제로 종료시켜 자동 복구를 확인합니다. 단위·HTTP 검증 명령은 컴퓨터 유즈나 브라우저 시각 검증을 실행하지 않습니다.
 
 ## 미니멀 고도화 검증
 

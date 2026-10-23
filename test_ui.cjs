@@ -10,6 +10,7 @@ w.HTMLAnchorElement.prototype.click=function(){this.dataset.clicked='true'};
 w.fetch=async(path,options={})=>{
  const body=options.body?JSON.parse(options.body):null;requests.push({path,body});
  if(path==='/api/setup'&&setupFailures-->0)throw Error('Simulated startup offline');
+ if(path==='/api/setup'){const value=await(await fetch(base+path,options)).json();value.hardware={...value.hardware,cpu:'',logical_cpus:null,ram_gib:null};return new Response(JSON.stringify(value))}
  if(path==='/api/docs/slack'&&docFailure)return new Response('{}',{status:503});
  if(path==='/api/tasks'&&loseTaskResponse){loseTaskResponse=false;const response=await fetch(base+path,options);await response.arrayBuffer();throw Error('Simulated response lost after commit')}
  if(path==='/api/slack/test')return new Response(JSON.stringify({ok:true,checks:[{workspace:'UI test workspace',channel:'agent-room'}]}),{headers:{'Content-Type':'application/json'}});
@@ -23,6 +24,8 @@ function click(selector){const node=d.querySelector(selector);assert.ok(node,sel
 function input(selector,value,event='input'){const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))}
 async function main(){
  await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
+ assert.equal(d.querySelector('#machineCpu').textContent,'CPU 정보 미확인');
+ assert.equal(d.querySelector('#hardwareSummary').textContent,'CPU 정보 미확인');
  assert.equal(d.querySelector('#onboarding').hidden,false);
  const waiting={id:'wait-check',title:'waiting',mode:'demo',status:'queued',wait_reason:'vm_access',stage:0,created:Date.now()/1000,retry_at:Date.now()/1000+1};assert.ok(w.waitRow(waiting).includes('데모'));assert.ok(w.waitRow(waiting).includes('VM 사용권 대기'));assert.ok(w.waitNotice(waiting).includes('VM 사용권 대기'));
  assert.equal(d.querySelector('#profileOS').value,'auto');
