@@ -189,6 +189,25 @@ class VBoxPreparationTests(unittest.TestCase):
         with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'short')
         self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],plan['id'])
 
+    def test_recovery_audits_installation_without_deleting_private_files(self):
+        import json
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id'])
+        private=self.root/'runtime/vbox-private/fixture';private.mkdir(parents=True);answer=private/'answer.xml';answer.write_text('fixture installation file')
+        installation={'plan_id':plan['id'],'state':'media_prepared','private_directory':'runtime/vbox-private/fixture'}
+        write_setting(self.store,'vbox_installation',installation)
+        result=vbox.clear_preparation(self.store,self.vm,plan['id'],'installation-recovery-01')
+        self.assertTrue(result['cleared']);self.assertEqual(read_setting(self.store,'vbox_installation',{}),{})
+        self.assertEqual(answer.read_text(),'fixture installation file')
+        with self.store.connect() as c:snapshot=json.loads(c.execute('SELECT snapshot FROM vbox_recovery_audit').fetchone()[0])
+        self.assertEqual(json.loads(snapshot['vbox_installation']),installation)
+    def test_recovery_preserves_foreign_installation_record(self):
+        plan=self.preview();vbox.prepare(self.store,self.vm,plan['id'])
+        installation={'plan_id':'different-plan','state':'media_prepared'};write_setting(self.store,'vbox_installation',installation)
+        self.assertFalse(vbox.recovery_check(self.store,self.vm)['can_clear'])
+        with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'foreign-installation-01')
+        self.assertEqual(read_setting(self.store,'vbox_installation',{}),installation)
+        self.assertEqual(read_setting(self.store,'vbox_plan',{})['id'],plan['id'])
+
     def test_project_lock_covers_different_data_stores_and_releases(self):
         other=Store(self.root/'other-data');other_vm=VM(other)
         with vbox.project_lock():
