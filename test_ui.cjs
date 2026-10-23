@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -177,6 +177,25 @@ async function main(){
  docFailure=false;click('[data-action="retry-doc"]');
  await until(()=>d.querySelector('#docContent h1')?.textContent==='Slack 연결하기','built-in guide');
  assert.ok(d.querySelectorAll('#docNav a').length>=8);
+ {
+ const catalog=await(await fetch(base+'/api/docs')).json(),beforeRaceFetch=w.fetch;
+ for(const failOld of [false,true]){
+  let releaseOld,rejectOld,calls=0;w.testResetDocs();
+  w.fetch=(path,options)=>{
+   if(path==='/api/docs'){if(calls++===0)return new Promise((resolve,reject)=>{releaseOld=resolve;rejectOld=reject});return Promise.resolve(new Response(JSON.stringify(catalog)))}
+   if(path==='/api/docs/team')return Promise.resolve(new Response('<h1>최신 팀 안내</h1>'));
+   if(path==='/api/docs/slack')return Promise.resolve(new Response('<h1>이전 Slack 안내</h1>'));
+   return beforeRaceFetch(path,options);
+  };
+  const old=w.testLoadDoc('slack');await until(()=>releaseOld,'older guide catalog pending');
+  await w.testLoadDoc('team');assert.equal(d.querySelector('#docContent h1').textContent,'최신 팀 안내');
+  if(failOld)rejectOld(Error('old catalog offline'));else releaseOld(new Response(JSON.stringify(catalog)));
+  await old;
+  assert.equal(d.querySelector('#docNav a.active')?.dataset.doc,'team','stale catalog must not change the active guide');
+  assert.equal(d.querySelector('#docContent h1').textContent,'최신 팀 안내');
+ }
+ w.fetch=beforeRaceFetch;
+ }
  input('#docSearch','메모리');assert.ok(d.querySelectorAll('#docNav a').length<8);
  const originalFetch=w.fetch,originalTimer=w.setTimeout;
  w.setTimeout=(fn,ms,...args)=>originalTimer(fn,ms===30000?25:ms,...args);
