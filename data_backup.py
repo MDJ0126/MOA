@@ -86,6 +86,16 @@ def restored_connection(key,raw):
     except (ValueError,TypeError,OverflowError,RecursionError):return default
 
 
+def restored_execution_profile(raw):
+    from environment_profiles import DEFAULT,validate
+    try:
+        source=json.loads(raw,object_pairs_hook=manifest_object)
+        value=validate(source);revision=source.get('updated',0)
+        if type(revision) not in (int,float) or not math.isfinite(revision) or revision<0:raise ValueError('profile revision')
+        return {**value,'updated':revision}
+    except (ValueError,TypeError,OverflowError,RecursionError):return {**DEFAULT,'updated':0}
+
+
 def backup(source, output):
     source, output = Path(source).resolve(), Path(output).resolve()
     if not (source / 'state.sqlite3').is_file():
@@ -211,6 +221,10 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             for table in ('outbox','slack_inbox'):
                 if table in tables:
                     c.execute(f"UPDATE {table} SET state='held_restored' WHERE state='pending'")
+            profile=c.execute("SELECT value FROM settings WHERE key='execution_profile'").fetchone()
+            if profile:
+                archive_setting(c,'execution_profile',profile[0])
+                c.execute("UPDATE settings SET value=? WHERE key='execution_profile'",(json.dumps(restored_execution_profile(profile[0])),))
             for key in ('slack', 'vm'):
                 row = c.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
                 if row:
