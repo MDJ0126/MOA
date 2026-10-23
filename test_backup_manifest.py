@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from app import Store
 from data_backup import backup,restore
 
@@ -36,4 +37,17 @@ class BackupManifestTests(unittest.TestCase):
     def test_generated_manifest_still_roundtrips(self):
         restored=self.root/'restored';restore(self.archive,restored)
         with Store(restored).connect() as connection:self.assertEqual(connection.execute('SELECT count(*) FROM tasks').fetchone()[0],0)
+    def test_inconsistent_file_metadata_is_rejected_before_payload_read(self):
+        original_open=zipfile.ZipFile.open
+        for changes in ({'size':0},{'size':self.manifest['files']['state.sqlite3']['size']+1},{'sha256':'invalid'}):
+            with self.subTest(changes=changes):
+                value=json.loads(json.dumps(self.manifest));value['files']['state.sqlite3'].update(changes)
+                self.replace_manifest(json.dumps(value));payload_reads=[]
+                def observed_open(archive,name,*args,**kwargs):
+                    filename=name.filename if isinstance(name,zipfile.ZipInfo) else name
+                    if filename.startswith('data/'):payload_reads.append(filename)
+                    return original_open(archive,name,*args,**kwargs)
+                with patch.object(zipfile.ZipFile,'open',observed_open):
+                    with self.assertRaises(ValueError):restore(self.archive,self.root/'restored')
+                self.assertEqual(payload_reads,[]);self.assertFalse((self.root/'restored').exists())
 

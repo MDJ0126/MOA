@@ -174,11 +174,17 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 raise ValueError('대소문자가 충돌하는 경로입니다.')
             if set(names) != {'manifest.json'} | {'data/' + name for name in files}:
                 raise ValueError('백업 목록과 실제 파일이 다릅니다.')
-            aliases={}
+            aliases={};checked_paths={}
             for name, expected in files.items():
                 if not isinstance(expected, dict) or type(expected.get('size')) is not int or expected['size'] < 0 or not isinstance(expected.get('sha256'), str):
                     raise ValueError('잘못된 백업 파일 정보입니다.')
-                parts=checked_backup_path(name,aliases)
+                if not re.fullmatch('[0-9a-f]{64}',expected['sha256']):
+                    raise ValueError('백업 파일 해시 검증에 실패했습니다.')
+                if z.getinfo('data/'+name).file_size!=expected['size']:
+                    raise ValueError('백업 파일 크기가 목록과 다릅니다.')
+                checked_paths[name]=checked_backup_path(name,aliases)
+            for name, expected in files.items():
+                parts=checked_paths[name]
                 path = staged.joinpath(*parts)
                 if not _inside(path.resolve(), staged.resolve()):
                     raise ValueError('복원 폴더 밖 경로입니다.')
