@@ -27,6 +27,7 @@ from model_transport import request_json,ollama_text,model_output,ModelError,RET
 from artifacts import open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict,validate_team
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
+import environment_profiles
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
 
 ROOT = Path(__file__).resolve().parent
@@ -621,7 +622,7 @@ def serve(root, port, model, url,demo_only=False):
                         except (OSError,ValueError,AttributeError):continue
                 self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
             elif self.path=='/api/setup':
-                self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE})
+                self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE,'execution_profile':environment_profiles.settings(store),'environment_recommendation':environment_profiles.recommend(environment_profiles.settings(store))})
             elif self.path=='/api/slack/recovery':
                 self.send(200,slack.recovery())
             elif self.path.startswith('/api/vm/evidence?'):
@@ -757,6 +758,10 @@ def serve(root, port, model, url,demo_only=False):
                     if folder.resolve()!=ROOT/'backups' or not archive.is_file() or archive.is_symlink() or archive.resolve().parent!=folder.resolve():raise ValueError('백업 파일을 찾을 수 없습니다.')
                     try:self.send(200,inspect_backup(archive))
                     except (zipfile.BadZipFile,sqlite3.Error,RuntimeError,NotImplementedError):raise ValueError('백업 ZIP 또는 데이터베이스가 손상되었거나 지원하지 않는 형식입니다.') from None
+                elif self.path=='/api/setup/execution-profile':
+                    self.send(200,environment_profiles.save(store,data))
+                elif self.path=='/api/setup/execution-preview':
+                    self.send(200,environment_profiles.recommend(data))
                 elif self.path=='/api/setup/vm':
                     self.send(200,worker.vm.save(data))
                 elif self.path=='/api/vm/control':

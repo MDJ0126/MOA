@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import subprocess
 import re
 import threading
 import time
@@ -101,9 +102,30 @@ def make_plan(store,tid):
 def legacy_plan():
     return {'pipeline':list(CAPABILITIES),'agents':copy.deepcopy(DEFAULT_AGENTS),'assignment':{r:r for r in CAPABILITIES}}
 
+_cpu_sample=None
+
+def cpu_usage(system):
+    """Non-blocking difference between two host snapshots; first sample unknown."""
+    global _cpu_sample
+    try:
+        if system=='Windows':
+            idle=ctypes.c_ulonglong();kernel=ctypes.c_ulonglong();user=ctypes.c_ulonglong()
+            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle),ctypes.byref(kernel),ctypes.byref(user)):return None
+            sample=(system,idle.value,kernel.value+user.value)
+        elif system=='Linux':
+            fields=Path('/proc/stat').read_text().splitlines()[0].split()
+            if fields[0]!='cpu':return None
+            values=list(map(int,fields[1:9]));sample=(system,values[3]+values[4],sum(values))
+        else:return None
+    except (OSError,ValueError,IndexError):return None
+    with LOCK:
+        previous=_cpu_sample;_cpu_sample=sample
+    if previous is None or previous[0]!=system or sample[2]<=previous[2] or sample[1]<previous[1]:return None
+    return round(max(0,min(100,100*(1-(sample[1]-previous[1])/(sample[2]-previous[2])))),1)
+
 def hardware():
     result={'os':platform.system(),'logical_cpus':os.cpu_count(),'ram_gib':None,'available_ram_gib':None}
-    if os.name=='nt':
+    if result['os']=='Windows':
         class M(ctypes.Structure):
             _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong)]+[(n,ctypes.c_ulonglong) for n in ('total','available','p1','p2','v1','v2','ex')]
         m=M();m.length=ctypes.sizeof(m)
@@ -113,6 +135,22 @@ def hardware():
             import winreg
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:result['cpu']=winreg.QueryValueEx(key,'ProcessorNameString')[0].strip()
         except OSError:pass
+    elif platform.system()=='Linux':
+        try:
+            values={line.split(':')[0]:int(line.split()[1])*1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith(('MemTotal:','MemAvailable:'))}
+            result['ram_gib']=round(values['MemTotal']/2**30,2)
+            if 'MemAvailable' in values:result['available_ram_gib']=round(values['MemAvailable']/2**30,2)
+        except (OSError,ValueError,KeyError,IndexError):pass
+    elif platform.system()=='Darwin':
+        try:
+            query=subprocess.run(['/usr/sbin/sysctl','-n','hw.memsize'],capture_output=True,text=True,timeout=2,check=True)
+            result['ram_gib']=round(int(query.stdout.strip())/2**30,2)
+        except (OSError,ValueError,subprocess.SubprocessError):pass
+        # Reclaimable macOS memory is not equivalent to free pages; leave unknown.
+    total=result['ram_gib'];free=result['available_ram_gib']
+    result['memory_used_percent']=round(max(0,min(100,100*(1-free/total))),1) if total and free is not None else None
+    result['architecture']=platform.machine()
+    result['cpu_used_percent']=cpu_usage(result['os'])
     ram=result['ram_gib']
     result['recommended_preset']='compact' if ram is not None and ram<12 else 'light' if ram is None or ram<24 else 'standard'
     result['recommendation_note']='총 RAM에 따른 시작 구성입니다. 실제 모델 속도와 메모리는 작업에 따라 달라집니다. 모든 프리셋은 순차 실행합니다.'

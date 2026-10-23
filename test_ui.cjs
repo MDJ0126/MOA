@@ -24,6 +24,24 @@ function input(selector,value,event='input'){const node=d.querySelector(selector
 async function main(){
  await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
  assert.equal(d.querySelector('#onboarding').hidden,false);
+ assert.equal(d.querySelector('#profileOS').value,'auto');
+ input('#profileOS','macos','change');input('#profileLocation','remote','change');input('#profileBudget','25','change');
+ await until(()=>d.querySelector('#profileRecommendation').textContent.includes('원격 장비 사양 미확인'),'remote uses no host budget');
+ assert.ok(d.querySelector('#profileSaveState').textContent.includes('저장하지'));
+ click('[data-action="save-profile"]');
+ await until(()=>d.querySelector('#profileSaveState').textContent==='','profile saved');
+ const profileState=await(await fetch(base+'/api/setup')).json();
+ assert.equal(profileState.execution_profile.target_os,'macos');assert.equal(profileState.execution_profile.budget_percent,25);
+ assert.equal(profileState.environment_recommendation.recommended,null);assert.equal(profileState.environment_recommendation.connected,false);
+ const stale=await fetch(base+'/api/setup/execution-profile',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({expected_updated:0})});assert.equal(stale.status,409);
+ click('[data-action="preview-profile"]');await until(()=>d.querySelector('#profileRuntime').textContent.includes('미구현'),'unconnected runtime clearly labeled');
+ {const realFetch=w.fetch;let releaseOld,previewCount=0;
+ w.fetch=(path,options)=>{if(path==='/api/setup/execution-preview'){const result={...profileState.environment_recommendation,note:'최신 추천'};if(previewCount++===0)return new Promise(resolve=>{releaseOld=()=>resolve(new Response(JSON.stringify({...result,note:'이전 추천'})))});return Promise.resolve(new Response(JSON.stringify(result)))}return realFetch(path,options)};
+ input('#profileBudget','50','change');input('#profileBudget','25','change');
+ await until(()=>d.querySelector('#profileRecommendation').textContent.includes('최신 추천'),'latest preview wins');releaseOld();await sleep(50);
+ assert.ok(d.querySelector('#profileRecommendation').textContent.includes('최신 추천'));assert.equal(d.querySelector('#profileBudget').value,'25');w.fetch=realFetch;}
+
+
  await until(()=>d.querySelector('#taskProfile').textContent.includes('데모'),'server default mode shown');
  assert.equal(d.querySelector('#taskMode').value,'demo');assert.equal(d.querySelector('#taskOptions').open,false);
  input('#taskMode','ollama','change');await w.testRefresh();assert.equal(d.querySelector('#taskMode').value,'ollama');assert.ok(d.querySelector('#taskProfile').textContent.includes('Ollama'));
@@ -37,7 +55,7 @@ async function main(){
  click('[data-action="reset-team"]');assert.equal(d.querySelector('#agent-name-0').value,'계획 담당');
  click('[data-preset="light"]');
  input('#agent-name-0','테스트 빌더');click('#saveTeam');
- await until(()=>d.querySelector('#toast').textContent.includes('저장했습니다'),'team save');
+ await until(()=>d.querySelector('#toast').textContent.includes('팀 구성을 저장했습니다'),'team save');
  const config=await(await fetch(base+'/api/setup')).json();assert.equal(config.team.agents.length,2);assert.equal(config.team.agents[0].name,'테스트 빌더');
  const external=structuredClone(config.team);external.agents[0].name='다른 창의 이름';external.expected_updated=config.team.updated;
  await fetch(base+'/api/setup/team',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify(external)});
