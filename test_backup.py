@@ -39,6 +39,31 @@ class BackupTests(unittest.TestCase):
         self.assertEqual((destination / 'tasks' / 'result.txt').read_text(), 'result')
         self.assertFalse((destination / 'model.key').exists())
 
+    def test_restore_archives_exact_preparation_records_and_retains_archive_history(self):
+        from vbox_setup import restoration_status
+        records={'vbox_plan':'{"id":"old","root":"old-project"}','vbox_preparation':'invalid legacy JSON','vbox_installation':'{"state":"media_prepared"}'}
+        with self.store.connect() as c:
+            for key,value in records.items():c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,value))
+        backup(self.source,self.archive);destination=self.root/'restored';restore(self.archive,destination)
+        restored=Store(destination)
+        with restored.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'vbox_%'").fetchone()[0],0)
+            self.assertEqual(json.loads(c.execute('SELECT snapshot FROM vbox_restore_archive').fetchone()[0]),records)
+        status=restoration_status(restored);self.assertEqual(status['archived_records'],1);self.assertNotIn('snapshot',status)
+        with self.store.connect() as c:self.assertEqual(dict(c.execute("SELECT key,value FROM settings WHERE key LIKE 'vbox_%'")),records)
+        second=self.root/'second.zip';backup(destination,second);twice=self.root/'restored-twice';restore(second,twice)
+        self.assertEqual(restoration_status(Store(twice))['archived_records'],1)
+        write_setting(restored,'vbox_plan',{'id':'new-plan'});third=self.root/'third.zip';backup(destination,third);thrice=self.root/'restored-thrice';restore(third,thrice)
+        self.assertEqual(restoration_status(Store(thrice))['archived_records'],2)
+    def test_restore_archive_failure_does_not_publish_destination(self):
+        write_setting(self.store,'vbox_plan',{'id':'old'})
+        with self.store.connect() as c:
+            c.execute('CREATE TABLE vbox_restore_archive(id INTEGER PRIMARY KEY,restored REAL NOT NULL,snapshot TEXT NOT NULL)')
+            c.execute("CREATE TRIGGER reject_restored_vbox BEFORE INSERT ON vbox_restore_archive BEGIN SELECT RAISE(ABORT,'fixture'); END")
+        backup(self.source,self.archive);destination=self.root/'restored'
+        with self.assertRaises(sqlite3.IntegrityError):restore(self.archive,destination)
+        self.assertFalse(destination.exists());self.assertEqual(read_setting(self.store,'vbox_plan',{})['id'],'old')
+
     def test_preview_validates_without_replacing_source(self):
         backup(self.source, self.archive)
         original=self.archive.read_bytes()

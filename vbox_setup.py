@@ -236,6 +236,15 @@ def prepare(store,vm,plan_id):
             raise
         return record
 
+def restoration_status(store):
+    with store.connect() as c:
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vbox_restore_archive'").fetchone():return None
+        row=c.execute('SELECT COUNT(*) AS count,MAX(restored) AS restored FROM vbox_restore_archive').fetchone()
+    if not row['count']:return None
+    return {'archived_records':row['count'],'restored_at':row['restored'],
+            'scope':'복원된 VirtualBox 준비 기록은 별도 보관했습니다. VM·설치 파일을 자동 연결하지 않습니다.'}
+
+
 def _recovery_state(store):
     with store.connect() as c:
         rows={row['key']:row['value'] for row in c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")}

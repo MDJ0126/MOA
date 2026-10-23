@@ -140,6 +140,13 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             if c.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('데이터베이스가 손상되었습니다.')
             c.execute("INSERT OR REPLACE INTO settings VALUES('paused','true')")
+            # Runtime ownership and installer side effects are outside data backup.
+            # Preserve exact old records for review, but never adopt them after restore.
+            vbox_records=dict(c.execute("SELECT key,value FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')"))
+            if vbox_records:
+                c.execute('CREATE TABLE IF NOT EXISTS vbox_restore_archive(id INTEGER PRIMARY KEY,restored REAL NOT NULL,snapshot TEXT NOT NULL)')
+                c.execute('INSERT INTO vbox_restore_archive(restored,snapshot) VALUES(?,?)',(time.time(),json.dumps(vbox_records,ensure_ascii=False)))
+                c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")
             tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for table in ('outbox','slack_inbox'):
                 if table in tables:

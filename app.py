@@ -655,7 +655,7 @@ def serve(root, port, model, url,demo_only=False):
                         except (OSError,ValueError,AttributeError):continue
                 self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
             elif self.path=='/api/vbox/setup':
-                self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None),'installation':read_setting(store,'vbox_installation',None)})
+                self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None),'installation':read_setting(store,'vbox_installation',None),'restoration':vbox_setup.restoration_status(store)})
             elif self.path=='/api/setup':
                 self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE,'execution_profile':environment_profiles.settings(store),'environment_recommendation':environment_profiles.recommend(environment_profiles.settings(store))})
             elif self.path=='/api/slack/recovery':

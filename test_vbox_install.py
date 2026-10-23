@@ -78,6 +78,20 @@ class InstallationTests(unittest.TestCase):
             with self.assertRaises(sqlite3.OperationalError):install.configure(self.store,self.vm,self.value)
         self.assertEqual(self.quiet,[])
         self.assertFalse(list((self.root/'runtime/vbox-private').glob('*/credential.txt')))
+    def test_restored_backup_does_not_reuse_live_runtime_installation_receipt(self):
+        from data_backup import backup,restore
+        install.configure(self.store,self.vm,self.value)
+        archive=self.root/'restore-check.zip';backup(self.store.root,archive)
+        destination=self.root/'restored-data';restore(archive,destination)
+        restored=Store(destination);restored_vm=VM(restored)
+        count=len(self.quiet)
+        with self.assertRaises(ValueError):install.configure(restored,restored_vm,self.value)
+        self.assertEqual(len(self.quiet),count)
+        self.assertIsNone(read_setting(restored,'vbox_installation',None))
+        self.assertTrue(self.cfg.is_file())
+        self.assertTrue(list((self.root/'runtime/vbox-private').glob('*/install-answer.xml')))
+        with self.assertRaises(ValueError):vbox.prepare(restored,restored_vm,self.plan['id'])
+        self.assertEqual(len(self.quiet),count)
     def test_private_directory_is_created_with_restricted_permissions(self):
         directory=private_directory(self.root/'permissions')
         if os.name=='nt':
