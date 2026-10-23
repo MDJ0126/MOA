@@ -148,6 +148,12 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 c.execute('INSERT INTO vbox_restore_archive(restored,snapshot) VALUES(?,?)',(time.time(),json.dumps(vbox_records,ensure_ascii=False)))
                 c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")
             tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'backup_requests' in tables and c.execute('SELECT 1 FROM backup_requests LIMIT 1').fetchone():
+                # PIDs and request identity belong to the installation that made
+                # the backup. Keep exact SQLite values, including legacy blobs.
+                c.execute('CREATE TABLE IF NOT EXISTS backup_restore_archive(id INTEGER PRIMARY KEY,restored REAL NOT NULL,request_key,file,state,helper_pid,created)')
+                c.execute('INSERT INTO backup_restore_archive(restored,request_key,file,state,helper_pid,created) SELECT ?,request_key,file,state,helper_pid,created FROM backup_requests',(time.time(),))
+                c.execute('DELETE FROM backup_requests')
             for table in ('outbox','slack_inbox'):
                 if table in tables:
                     c.execute(f"UPDATE {table} SET state='held_restored' WHERE state='pending'")
