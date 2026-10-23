@@ -7,8 +7,6 @@ import os
 from pathlib import Path
 import sqlite3
 import shutil
-import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -19,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checks import run_checks
 from diagnostics import inspect_installation
 from data_backup import inspect_backup
+from backup_jobs import schedule_request,request_status
 from local_model import Llama
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
@@ -43,6 +42,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,
               task_id TEXT, agent TEXT, kind TEXT, content TEXT, created REAL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE IF NOT EXISTS backup_requests(request_key TEXT PRIMARY KEY,file TEXT UNIQUE,state TEXT,helper_pid INTEGER,created REAL);
             INSERT OR IGNORE INTO settings VALUES('paused','false');
             ''')
             columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
@@ -471,7 +471,7 @@ def serve(root, port, model, url):
     slack_thread=threading.Thread(target=slack.loop,daemon=True)
     slack_thread.start()
     maintenance_lock=threading.Lock()
-    maintenance={'backup':False}
+    maintenance={'backup':None}
     class Handler(BaseHTTPRequestHandler):
         def send(self, status, data, kind='application/json; charset=utf-8'):
             body = json.dumps(data, ensure_ascii=False).encode() if not isinstance(data, bytes) else data
@@ -499,6 +499,11 @@ def serve(root, port, model, url):
                 self.send(200,state)
             elif self.path=='/api/diagnostics':
                 self.send(200,inspect_installation(ROOT,CONFIG,SDK_AVAILABLE))
+            elif self.path.startswith('/api/backups/request?'):
+                key=parse_qs(urlparse(self.path).query).get('key',[''])[0]
+                try:result=request_status(store,ROOT,key)
+                except ValueError as e:self.send(400,{'error':str(e)});return
+                self.send(200,result) if result else self.send(404,{'error':'아직 접수되지 않은 백업 요청입니다.'})
             elif self.path=='/api/backups':
                 folder=ROOT/'backups'
                 jobs=[]
@@ -603,20 +608,14 @@ def serve(root, port, model, url):
                 if self.path == '/api/tasks':
                     self.send(201,{'id':store.add(data['title'],data.get('mode',CONFIG.get('default_mode','demo')),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'))})
                 elif self.path=='/api/backups/create':
+                    key=data.get('request_key') or uuid.uuid4().hex
                     with maintenance_lock:
-                        if maintenance['backup']:raise ValueError('이미 종료 후 백업을 준비하고 있습니다.')
-                        maintenance['backup']=True
-                    folder=ROOT/'backups'
-                    try:
-                        if folder.resolve()!=ROOT/'backups':raise ValueError('프로젝트 내부 backups 폴더를 사용하세요.')
-                        folder.mkdir(exist_ok=True)
-                        name='workspace-'+time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]+'.zip'
-                        subprocess.Popen([sys.executable,str(ROOT/'data_backup.py'),'scheduled',str(store.root),str(folder/name),'--wait-pid',str(os.getpid())],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-                    except BaseException:
-                        maintenance['backup']=False
-                        raise
+                        if maintenance['backup'] and maintenance['backup']!=key:raise ValueError('이미 다른 백업 요청을 준비하고 있습니다.')
+                        result=schedule_request(store,ROOT,key,os.getpid())
+                        if result['state'] in ('completed','existing'):self.send(200,result);return
+                        maintenance['backup']=key
                     store.control('pause');worker.stop.set()
-                    try:self.send(202,{'file':name,'state':'waiting','message':'앱 종료 후 backups 폴더에 저장합니다. 백업 후 Start.ps1로 다시 실행하세요.'})
+                    try:self.send(202,result)
                     finally:threading.Thread(target=server.shutdown,daemon=True).start()
                 elif self.path=='/api/backups/inspect':
                     name=data.get('name','')

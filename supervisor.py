@@ -23,8 +23,9 @@ def write_status(path,status):
     return False
 
 def acquire(path):
-    lock=open(path,'a+b');lock.seek(0);lock.write(b'0');lock.flush();lock.seek(0)
+    lock=open(path,'a+b')
     try:
+        lock.seek(0);lock.write(b'0');lock.flush();lock.seek(0)
         if os.name=='nt':
             import msvcrt
             msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)

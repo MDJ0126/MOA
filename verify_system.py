@@ -100,8 +100,19 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             else:raise AssertionError('scheduled backup did not complete')
             from data_backup import inspect_backup
             assert inspect_backup(saved)['tasks']==2
+            process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            for _ in range(100):
+                try:
+                    recovered=request('/api/backups/request?key='+scheduled['request_key']);break
+                except (urllib.error.URLError,ConnectionError):time.sleep(.05)
+            else:raise AssertionError('backup request recovery failed')
+            assert recovered['state']=='completed'
+            replay=request('/api/backups/create',{'request_key':scheduled['request_key']})
+            assert replay['state']=='completed' and replay['file']==scheduled['file']
+            assert request('/api/diagnostics')['version']==1
+            request('/api/control',{'action':'shutdown'});process.wait(timeout=5)
         finally:
-            saved.unlink(missing_ok=True);status_file.unlink(missing_ok=True)
+            saved.unlink(missing_ok=True);status_file.unlink(missing_ok=True);saved.with_suffix('.job.lock').unlink(missing_ok=True)
         print('PASS: HTTP dashboard, request guard, sequential 2-task execution, real artifacts, single-worker lock, restart persistence, graceful shutdown')
     finally:
         if process.poll() is None:

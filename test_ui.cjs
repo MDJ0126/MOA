@@ -16,7 +16,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.testAPI=api;');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.testAPI=api;window.testBackupRecovery=recoverBackupRequest;');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -87,9 +87,14 @@ async function main(){
  assert.ok(d.querySelector('#backupResult').textContent.includes('현재 데이터는 변경하지'));
  w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({error:'손상된 백업입니다.'}),{status:400,headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
  click('[data-action="inspect-backup"]');await until(()=>d.querySelector('#backupResult').textContent.includes('손상된 백업'),'backup error preservation');
- w.fetch=async(path,options)=>path==='/api/backups/create'?new Response(JSON.stringify({file:'test.zip',message:'앱 종료 후 백업합니다.'}),{status:202,headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
+ let backupKey=null,backupPosts=0;
+ w.fetch=async(path,options)=>{if(path==='/api/backups/create'){const body=JSON.parse(options.body);if(backupKey)assert.equal(body.request_key,backupKey);backupKey=body.request_key;backupPosts++;if(backupPosts===1)throw Error('simulated lost backup response');return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'앱 종료 후 백업합니다.'}),{status:202,headers:{'Content-Type':'application/json'}})}if(path.startsWith('/api/backups/request?'))return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'접수된 백업입니다.'}),{headers:{'Content-Type':'application/json'}});return installationFetch(path,options)};
+ click('[data-action="create-backup"]');await until(()=>d.querySelector('#backupCreateState').dataset.accepted==='unknown','lost backup response');
+ assert.equal(w.localStorage.getItem('moa.pendingBackup'),backupKey);
  click('[data-action="create-backup"]');await until(()=>d.querySelector('#backupCreateState').dataset.accepted==='true','scheduled backup acknowledgement');
  assert.equal(d.querySelector('[data-action="create-backup"]').hidden,true);
+ w.fetch=async()=>new Response(JSON.stringify({file:'test.zip',state:'completed',message:'백업 완료'}),{headers:{'Content-Type':'application/json'}});
+ await w.testBackupRecovery();assert.equal(w.localStorage.getItem('moa.pendingBackup'),null);
  delete d.querySelector('#backupCreateState').dataset.accepted;
  w.fetch=installationFetch;
  docFailure=true;w.location.hash='docs/slack';await until(()=>d.querySelector('[data-action="retry-doc"]'),'guide error and retry');

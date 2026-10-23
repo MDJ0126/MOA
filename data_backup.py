@@ -3,6 +3,7 @@ import argparse
 from contextlib import ExitStack, closing
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
@@ -133,11 +134,17 @@ def inspect_backup(archive):
 
 
 def scheduled_backup(source, destination, parent_pid, timeout=300):
+    try:lease=acquire(Path(destination).with_suffix('.job.lock'))
+    except OSError:raise BusyBackup('같은 백업 요청이 이미 처리 중이거나 백업 폴더를 사용할 수 없습니다.') from None
+    with lease:return _scheduled_backup(source,destination,parent_pid,timeout)
+
+
+def _scheduled_backup(source, destination, parent_pid, timeout):
     from vm_runtime import pid_alive
     status = Path(destination).with_suffix('.status.json')
     deadline = time.monotonic() + timeout
     def record(state, message):
-        if not write_status(status, {'state': state, 'message': message}):
+        if not write_status(status, {'state': state, 'message': message,'helper_pid':os.getpid()}):
             raise OSError('백업 상태 파일을 저장하지 못했습니다.')
     record('waiting', '앱과 감시 관리자 종료를 기다리고 있습니다.')
     try:

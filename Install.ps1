@@ -1,8 +1,7 @@
 param([switch]$DownloadModel,[switch]$WithVM)
 $ErrorActionPreference = 'Stop'
-$BundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-if (Test-Path -LiteralPath $BundledPython) { $AgentPython = $BundledPython }
-else { $AgentPython = (Get-Command python -ErrorAction Stop).Source }
+. (Join-Path $PSScriptRoot 'PythonRuntime.ps1')
+$AgentPython = Resolve-MoaPython
 & $AgentPython -m pip install --target (Join-Path $PSScriptRoot 'runtime\pythonlibs') -r (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Slack 연결 도구 설치 실패' }
 if ($DownloadModel) {

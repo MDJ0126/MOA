@@ -6,6 +6,8 @@
 
 팀 설정 → 작업 환경에서 설치 상태를 확인하고, 앱 종료 후 백업 생성과 복원 전 검사를 요청할 수 있습니다. 백업 완료 후 Start.ps1로 앱을 다시 실행하세요. 화면 검사는 512 MB까지, 실제 복원은 기존 데이터를 덮어쓰지 않는 CLI 방식이며 앱의 데이터 가이드에 명령이 있습니다. 설치 진단의 파일 존재 표시는 실제 모델 추론·VM 부팅 검증을 뜻하지 않습니다.
 
+백업 요청 ID를 브라우저와 DB에 보존해 응답 유실 후 같은 요청을 확인·재전송할 수 있습니다. 설치·시작에 사용할 Python은 `MOA_PYTHON` 환경 변수로 지정할 수 있으며, Python 3.11 이상과 sqlite3·ssl을 실행 확인합니다. 지정하지 않은 경우 PATH, 기존 번들 순서로 확인합니다.
+
 Python 3.11 이상으로 `python -m unittest -q`, `python verify_system.py`를 실행합니다. DOM 검증에는 Node.js 22 이상과 jsdom 27.4.0이 필요합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python verify_ui.py`, `python verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로, PATH, 기존 Codex 런타임 순서로 찾습니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `verify_vm_live.py`는 별도입니다.
 
 계획·개발·검증·보고 역할이 로컬 Qwen 모델을 순서대로 사용합니다. 컴퓨터 유즈는 사용하지 않습니다. 엔진은 추후 연결 대상이고 Slack은 설정 화면에서 선택적으로 연결합니다.
