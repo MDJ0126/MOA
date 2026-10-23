@@ -1,0 +1,94 @@
+// Real DOM + local HTTP tests. No browser or computer-use session is opened.
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require('./runtime/ui-tests/node_modules/jsdom');
+const base=process.argv[2];
+const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
+const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
+const requests=[];let slackSaved=null,setupFailures=1,docFailure=false,loseTaskResponse=true,exported=null;
+w.URL.createObjectURL=blob=>{exported=blob;return 'blob:unit-test'};w.URL.revokeObjectURL=()=>{};
+w.HTMLAnchorElement.prototype.click=function(){this.dataset.clicked='true'};
+w.fetch=async(path,options={})=>{
+ const body=options.body?JSON.parse(options.body):null;requests.push({path,body});
+ if(path==='/api/setup'&&setupFailures-->0)throw Error('Simulated startup offline');
+ if(path==='/api/docs/slack'&&docFailure)return new Response('{}',{status:503});
+ if(path==='/api/tasks'&&loseTaskResponse){loseTaskResponse=false;const response=await fetch(base+path,options);await response.arrayBuffer();throw Error('Simulated response lost after commit')}
+ if(path==='/api/slack/test')return new Response(JSON.stringify({ok:true,checks:[{workspace:'UI test workspace',channel:'agent-room'}]}),{headers:{'Content-Type':'application/json'}});
+ if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
+ return fetch(base+path,options);
+};
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.testAPI=api;');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
+function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
+function input(selector,value,event='input'){const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))}
+async function main(){
+ await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
+ assert.equal(d.querySelector('#onboarding').hidden,false);
+ click('[data-action="recommended"]');await until(()=>!d.querySelector('#page-settings').hidden,'settings navigation');
+ assert.equal(d.querySelectorAll('.agent-editor').length,2);
+ input('#agent-name-0','저장 전 이름');assert.ok(d.querySelector('#teamSaveState').textContent.includes('저장하지'));
+ click('[data-action="reset-team"]');assert.equal(d.querySelector('#agent-name-0').value,'계획 담당');
+ click('[data-preset="light"]');
+ input('#agent-name-0','테스트 빌더');click('#saveTeam');
+ await until(()=>d.querySelector('#toast').textContent.includes('저장했습니다'),'team save');
+ const config=await(await fetch(base+'/api/setup')).json();assert.equal(config.team.agents.length,2);assert.equal(config.team.agents[0].name,'테스트 빌더');
+ const external=structuredClone(config.team);external.agents[0].name='다른 창의 이름';external.expected_updated=config.team.updated;
+ await fetch(base+'/api/setup/team',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify(external)});
+ input('#agent-name-0','유지할 입력');click('#saveTeam');await until(()=>!d.querySelector('#settingsConflict').hidden,'stale configuration conflict');
+ assert.equal(d.querySelector('#agent-name-0').value,'유지할 입력');
+ click('[data-action="reload-settings"]');await until(()=>d.querySelector('#toast').textContent.includes('최신 저장 버전'),'refresh version without losing draft');
+ assert.equal(d.querySelector('#agent-name-0').value,'유지할 입력');click('#saveTeam');await until(()=>d.querySelector('#toast').textContent.includes('팀 구성을 저장'),'save after reviewing conflict');
+ click('[data-preset="compact"]');click('#saveTeam');
+ await until(()=>d.querySelectorAll('.agent-card').length===1,'compact saved');
+ w.location.hash='home';await until(()=>!d.querySelector('#page-home').hidden,'home navigation');
+ input('#taskTitle','DOM 시험: <script>alert(1)</script> 작업');input('#taskMode','demo','change');click('#submitTask');
+ await until(()=>d.querySelector('#toast').textContent.includes('response lost'),'unknown submission outcome');
+ assert.ok(d.querySelector('#taskTitle').value.includes('DOM 시험'));click('#submitTask');
+ await until(()=>!d.querySelector('#taskModal').hidden,'task modal');
+ await until(()=>d.querySelector('#modalMeta').textContent.includes('완료'),'actual demo completed');
+ assert.ok(d.querySelector('#modalTitle').textContent.includes('<script>'));
+ assert.equal(d.querySelectorAll('#modalTitle script').length,0);
+ assert.ok(d.querySelector('a[href*="artifacts.zip"]'));
+ const state=await(await fetch(base+'/api/state')).json();assert.equal(state.tasks[0].stage,2);
+ assert.ok(state.messages.some(m=>m.agent==='maker'&&m.kind==='start'));
+ click('[data-action="technical"]');assert.ok(d.querySelectorAll('.bubble-body.technical').length>0);
+ click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
+ const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
+ click('[data-action="close-modal"]');
+ w.location.hash='work';await until(()=>!d.querySelector('#page-work').hidden&&d.querySelectorAll('#allTasks [data-task]').length===1,'server task list');
+ input('#taskSearch','없는 제목');await until(()=>d.querySelector('#workCount').textContent==='0개 작업','server search empty');
+ input('#taskSearch','DOM 시험');await until(()=>d.querySelector('#workCount').textContent==='1개 작업','server search found');
+ assert.ok(d.querySelector('.sidebar [data-page="work"]').getAttribute('aria-label'));
+ w.location.hash='settings/slack';await until(()=>!d.querySelector('#panel-slack').hidden,'slack tab');
+ d.querySelector('#tab-slack').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await until(()=>!d.querySelector('#panel-team').hidden,'keyboard tab navigation');
+ assert.equal(d.querySelector('#tab-team').tabIndex,0);click('#tab-slack');await until(()=>!d.querySelector('#panel-slack').hidden,'keyboard return');
+ input('#slackChannel','C12345678');input('#slackUsers','U12345678');input('[data-connection-field="bot_token"]','xoxb-ui-test');input('[data-connection-field="app_token"]','xapp-ui-test');
+ assert.ok(d.querySelector('#slackSaveState').textContent.includes('저장하지 않은'));
+ click('[data-action="add-slack"]');assert.equal(d.querySelector('[data-connection-field="bot_token"]').value,'xoxb-ui-test');
+ click('[data-remove-connection]');assert.equal(d.querySelector('[data-connection-field="app_token"]').value,'xapp-ui-test');
+ click('#testSlack');await until(()=>d.querySelector('#slackTestResult').textContent.includes('확인 완료'),'connection test presentation');
+ assert.equal(slackSaved,null,'test must not enable connection');
+ click('#connectSlack');await until(()=>slackSaved!==null,'save slack');
+ assert.equal(slackSaved.allowed_users[0],'U12345678');assert.equal(slackSaved.enabled,true);
+ await until(()=>d.querySelector('[data-connection-field="bot_token"]').value==='','clear saved token field');
+ assert.ok(d.querySelector('[data-connection-field="bot_token"]').placeholder.includes('저장된'));
+ w.location.hash='settings/environment';await until(()=>!d.querySelector('#panel-environment').hidden,'shared environment tab');
+ assert.equal(d.querySelector('#vmMemory').value,'512');
+ input('#vmMemory','1024','change');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
+ click('[data-action="save-vm"]');await until(()=>d.querySelector('#toast').textContent.includes('VM 환경을 저장'),'VM configuration save');
+ const vmConfig=await(await fetch(base+'/api/vm')).json();assert.equal(vmConfig.config.memory_mb,1024);assert.equal(vmConfig.state,'stopped');
+ assert.equal(d.querySelector('#taskEnvironment').options.length,2);
+ docFailure=true;w.location.hash='docs/slack';await until(()=>d.querySelector('[data-action="retry-doc"]'),'guide error and retry');
+ docFailure=false;click('[data-action="retry-doc"]');
+ await until(()=>d.querySelector('#docContent h1')?.textContent==='Slack 연결하기','built-in guide');
+ assert.ok(d.querySelectorAll('#docNav a').length>=8);
+ input('#docSearch','메모리');assert.ok(d.querySelectorAll('#docNav a').length<8);
+ const originalFetch=w.fetch,originalTimer=w.setTimeout;
+ w.setTimeout=(fn,ms,...args)=>originalTimer(fn,ms===30000?25:ms,...args);
+ w.fetch=(path,options)=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError'))));
+ await assert.rejects(w.testAPI('/timeout-test'),/응답 시간이 초과/);
+ w.fetch=async()=>new Response('not json');await assert.rejects(w.testAPI('/bad-response'),/서버 응답/);
+ w.fetch=originalFetch;w.setTimeout=originalTimer;
+ console.log('PASS: shared VM settings/tab/dirty/save, startup recovery, request timeout, bad JSON response, dirty state/reset, keyboard tabs, server task search, guide failure/retry, preset/team, compact execution, safe text, modal, Slack distinction/secret clearing, docs/search');
+}
+main().then(()=>{dom.window.close()}).catch(error=>{console.error(error);dom.window.close();process.exitCode=1});

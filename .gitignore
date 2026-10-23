@@ -1,0 +1,13 @@
+data/
+__pycache__/
+*.pyc
+runtime/
+models/
+hardware.json
+.env
+.env.*
+!.env.example
+*.log
+.venv/
+venv/
+node_modules/

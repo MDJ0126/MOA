@@ -1,0 +1,13 @@
+{
+  "model": "qwen-local",
+  "model_description": "Qwen2.5-Coder-7B-Instruct Q4_K_M (CPU)",
+  "model_url": "http://127.0.0.1:8766",
+  "default_mode": "llama",
+  "model_file": "models/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+  "runtime_executable": "runtime/llama/llama-server.exe",
+  "threads": 4,
+  "context_size": 4096,
+  "max_revisions": 2,
+  "engine": {"enabled": false},
+  "slack": {"enabled": false}
+}
