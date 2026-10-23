@@ -16,7 +16,7 @@ Python 3.11 이상을 준비한 뒤 `./Start.ps1 -Demo`로 시작하고 http://1
 
 수정 반복에서도 최근 사용자 지시 최대 3개를 우선 유지합니다(전체 최근 맥락 6개). 결과 보고서는 이름·역할·검증 범위를 먼저 보여주고, 해시를 대조한 스냅샷으로 생성합니다. 데모·실행 테스트 없음·검증 후 파일 변경을 구분하며 ZIP에는 팀원별 대화도 포함합니다.
 
-Python 3.11 이상으로 `python -m unittest -q`, `python verify_system.py`를 실행합니다. DOM 검증에는 Node.js 22 이상과 jsdom 27.4.0이 필요합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python verify_ui.py`, `python verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로, PATH, 기존 Codex 런타임 순서로 찾습니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `verify_vm_live.py`는 별도입니다.
+Python 3.11 이상으로 `python -m unittest -q`, `python verify_system.py`를 실행합니다. DOM 검증에는 jsdom 27.4.0과 호환되는 Node.js 20.19+ (20.x), 22.12+ (22.x) 또는 24+가 필요합니다. 앱 실행에는 Node가 필요하지 않습니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python verify_ui.py`, `python verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로를 우선 확인하고, 미지정이면 PATH와 기존 번들 중 실행·버전 확인을 통과한 경로를 사용합니다. 잘못된 명시 경로를 자동으로 바꾸지는 않습니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `verify_vm_live.py`는 별도입니다.
 
 계획·개발·검증·보고 역할이 로컬 Qwen 모델을 순서대로 사용합니다. 컴퓨터 유즈는 사용하지 않습니다. 엔진은 추후 연결 대상이고 Slack은 설정 화면에서 선택적으로 연결합니다.
 
