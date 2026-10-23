@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checks import run_checks
 from diagnostics import inspect_installation
 from data_backup import inspect_backup
-from backup_jobs import schedule_request,request_status
+from backup_jobs import schedule_request,request_status,list_backups
 from local_model import Llama,relevant_history
 from conversation import for_agent,enrich,task_messages,history_plan
 from reports import publish,workspace_files,hash_file
@@ -744,18 +744,10 @@ def serve(root, port, model, url,demo_only=False):
                 key=parse_qs(urlparse(self.path).query).get('key',[''])[0]
                 try:result=request_status(store,ROOT,key)
                 except ValueError as e:self.send(400,{'error':str(e)});return
+                except OSError:self.send(503,{'error':'백업 파일에 접근하지 못했습니다. 사용 상태와 폴더 권한을 확인하세요.'});return
                 self.send(200,result) if result else self.send(404,{'error':'아직 접수되지 않은 백업 요청입니다.'})
             elif self.path=='/api/backups':
-                folder=ROOT/'backups'
-                jobs=[]
-                if folder.resolve()==ROOT/'backups':
-                    for path in sorted(folder.glob('*.status.json'),reverse=True)[:20]:
-                        try:
-                            if path.is_symlink() or path.resolve().parent!=folder.resolve() or path.stat().st_size>4096:continue
-                            value=json.loads(path.read_text(encoding='utf-8'))
-                            if value.get('state') in ('waiting','completed','failed'):jobs.append({'file':path.name,'state':value['state'],'message':str(value.get('message',''))[:300]})
-                        except (OSError,ValueError,AttributeError):continue
-                self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
+                self.send(200,list_backups(ROOT))
             elif self.path=='/api/vbox/setup':
                 self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None),'installation':read_setting(store,'vbox_installation',None),'restoration':vbox_setup.restoration_status(store)})
             elif self.path=='/api/setup':
