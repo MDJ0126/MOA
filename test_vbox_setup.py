@@ -187,4 +187,60 @@ class VBoxPreparationTests(unittest.TestCase):
         with self.assertRaises(ValueError):vbox.clear_preparation(self.store,self.vm,plan['id'],'short')
         self.assertEqual(read_setting(self.store,'vbox_preparation',{})['id'],plan['id'])
 
+    def test_project_lock_covers_different_data_stores_and_releases(self):
+        other=Store(self.root/'other-data');other_vm=VM(other)
+        with vbox.project_lock():
+            with self.assertRaises(BusyVM):vbox.preview(other,other_vm,self.request)
+            with other_vm.exclusive():pass
+        self.assertTrue(vbox.preview(other,other_vm,self.request)['can_prepare'])
+
+    def test_project_lock_is_exclusive_in_a_separate_python_process(self):
+        import subprocess,sys
+        script='''import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import vbox_setup as vbox
+from vm_runtime import BusyVM
+vbox.ROOT=Path(sys.argv[2])
+try:
+ with vbox.project_lock():pass
+except BusyVM:raise SystemExit(0)
+raise SystemExit(7)
+'''
+        args=[sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent),str(self.root)]
+        with vbox.project_lock():
+            result=subprocess.run(args,capture_output=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))
+        result=subprocess.run(args,capture_output=True,timeout=10)
+        self.assertEqual(result.returncode,7,result.stderr.decode(errors='replace'))
+
+    def test_two_data_stores_cannot_prepare_two_vms_after_metadata_loss(self):
+        other=Store(self.root/'other-data');other_vm=VM(other)
+        first=self.preview();second=vbox.preview(other,other_vm,self.request)
+        original=self.command
+        def simulate_files(binary,args):
+            result=original(binary,args)
+            if args[0]=='createvm':
+                name=args[args.index('--name')+1];uid=args[args.index('--uuid')+1]
+                self.registered='"'+name+'" {'+uid+'}'
+                (self.root/'runtime/vbox'/name).mkdir(parents=True)
+            return result
+        with patch.object(vbox,'command',side_effect=simulate_files):
+            vbox.prepare(self.store,self.vm,first['id'])
+            with self.assertRaises(ValueError):vbox.prepare(other,other_vm,second['id'])
+        self.assertEqual(sum(args[0]=='createvm' for args in self.calls),1)
+        with self.store.connect() as c:c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation')")
+        self.assertFalse(self.preview()['can_prepare'])
+        self.assertEqual(read_setting(other,'vbox_preparation',{}),{})
+
+    def test_project_registration_namespace_and_unknown_files_are_checked(self):
+        plan=self.preview();prefix=vbox.project_prefix(plan['runtime_owner'])
+        self.registered='"'+prefix+'elsewhere" {00000000-0000-0000-0000-000000000001}'
+        self.assertFalse(vbox.inspect(plan)['can_prepare'])
+        self.registered='"different-project" {00000000-0000-0000-0000-000000000002}'
+        self.assertTrue(vbox.inspect(plan)['can_prepare'])
+        self.registered='unknown output';self.assertFalse(vbox.inspect(plan)['can_prepare'])
+        self.registered='';folder=self.root/'runtime/vbox';folder.mkdir();(folder/'unknown.img').write_bytes(b'preserve me')
+        self.assertFalse(vbox.inspect(plan)['can_prepare']);self.assertEqual((folder/'unknown.img').read_bytes(),b'preserve me')
+
 if __name__=='__main__':unittest.main()
