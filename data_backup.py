@@ -12,7 +12,8 @@ import time
 import zipfile
 from supervisor import acquire, write_status
 
-SKIP = {'worker.lock', 'supervisor.lock', 'supervisor.stop', 'supervisor.json', 'model.key'}
+SKIP = {'worker.lock', 'supervisor.lock', 'supervisor.stop', 'supervisor.json', 'model.key','state.sqlite3-wal','state.sqlite3-shm'}
+CHUNK_SIZE=64*1024
 
 class BusyBackup(ValueError):pass
 
@@ -36,20 +37,31 @@ def backup(source, output):
             raise BusyBackup('앱과 감시 관리자를 정상 종료한 뒤 백업하세요.') from exc
         with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
             archive = Path(temporary) / 'backup.zip'
+            snapshot=Path(temporary)/'state.sqlite3'
+            database=source/'state.sqlite3'
+            if database.is_symlink() or database.stat().st_nlink!=1:raise ValueError('링크 데이터베이스는 백업하지 않습니다.')
+            with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)) as original,closing(sqlite3.connect(snapshot)) as target:
+                original.backup(target)
+                target.execute('PRAGMA journal_mode=DELETE')
+                if target.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('백업 데이터베이스가 손상되었습니다.')
             files = {}
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
                 for path in sorted(source.rglob('*')):
                     relative = path.relative_to(source)
-                    if relative.parts[0] == 'vm' or relative.as_posix() in SKIP:
+                    if relative.parts[0].casefold() == 'vm' or relative.as_posix().casefold() in SKIP:
                         continue
                     if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
                         raise ValueError('링크가 포함된 데이터는 백업하지 않습니다.')
                     if not _inside(path.resolve(), source):
                         raise ValueError('데이터 폴더 밖 경로입니다.')
                     if path.is_file():
-                        data = path.read_bytes()
-                        files[relative.as_posix()] = {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
-                        z.writestr('data/' + relative.as_posix(), data)
+                        if path.stat(follow_symlinks=False).st_nlink!=1:raise ValueError('하드링크가 포함된 데이터는 백업하지 않습니다.')
+                        name='state.sqlite3' if relative.as_posix().casefold()=='state.sqlite3' else relative.as_posix()
+                        actual=snapshot if name=='state.sqlite3' else path
+                        digest=hashlib.sha256();size=0
+                        with actual.open('rb') as stream,z.open('data/'+name,'w',force_zip64=True) as stored:
+                            while block:=stream.read(CHUNK_SIZE):stored.write(block);digest.update(block);size+=len(block)
+                        files[name] = {'size':size,'sha256':digest.hexdigest()}
                 z.writestr('manifest.json', json.dumps({'version': 1, 'files': files}, ensure_ascii=False))
             # Exclusive creation prevents another backup being overwritten.
             created = False
@@ -86,21 +98,29 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 raise ValueError('대소문자가 충돌하는 경로입니다.')
             if set(names) != {'manifest.json'} | {'data/' + name for name in files}:
                 raise ValueError('백업 목록과 실제 파일이 다릅니다.')
+            aliases={}
             for name, expected in files.items():
                 if not isinstance(expected, dict) or type(expected.get('size')) is not int or expected['size'] < 0 or not isinstance(expected.get('sha256'), str):
                     raise ValueError('잘못된 백업 파일 정보입니다.')
                 parts = PurePosixPath(name).parts
                 reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in range(1, 10)}
-                if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name in SKIP or parts[0] == 'vm':
+                if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold() == 'vm':
                     raise ValueError('잘못된 백업 경로입니다.')
+                for i in range(1,len(parts)+1):
+                    prefix='/'.join(parts[:i]);folded=prefix.casefold()
+                    if folded in aliases and aliases[folded]!=prefix:raise ValueError('대소문자 디렉터리 경로가 충돌합니다.')
+                    aliases[folded]=prefix
                 path = staged.joinpath(*parts)
                 if not _inside(path.resolve(), staged.resolve()):
                     raise ValueError('복원 폴더 밖 경로입니다.')
-                content = z.read('data/' + name)
-                if len(content) != expected['size'] or hashlib.sha256(content).hexdigest() != expected['sha256']:
-                    raise ValueError('백업 파일 검증에 실패했습니다.')
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
+                digest=hashlib.sha256();size=0
+                with z.open('data/'+name) as stream,path.open('wb') as output:
+                    while block:=stream.read(CHUNK_SIZE):
+                        size+=len(block)
+                        if size>expected['size']:raise ValueError('백업 파일 크기가 목록과 다릅니다.')
+                        output.write(block);digest.update(block)
+                if size != expected['size'] or digest.hexdigest() != expected['sha256']:raise ValueError('백업 파일 검증에 실패했습니다.')
         db = staged / 'state.sqlite3'
         if not db.is_file():
             raise ValueError('백업에 데이터베이스가 없습니다.')

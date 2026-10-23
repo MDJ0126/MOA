@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -97,3 +99,53 @@ class BackupTests(unittest.TestCase):
         with acquire(self.source / 'supervisor.lock'):
             with self.assertRaisesRegex(ValueError, '정상 종료'):backup(self.source, self.archive)
         self.assertFalse(self.archive.exists())
+
+    def test_wal_commits_are_in_consistent_snapshot(self):
+        with closing(sqlite3.connect(self.source / 'state.sqlite3')) as writer:
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute("INSERT OR REPLACE INTO settings VALUES('snapshot_marker','123')")
+            writer.commit()
+            self.assertTrue((self.source / 'state.sqlite3-wal').exists())
+            backup(self.source,self.archive)
+            with zipfile.ZipFile(self.archive) as z:
+                self.assertFalse(any(n.endswith(('-wal','-shm')) for n in z.namelist()))
+            destination=self.root/'restored'
+            restore(self.archive,destination)
+            self.assertEqual(read_setting(Store(destination),'snapshot_marker',None),123)
+
+    def test_data_io_is_streamed(self):
+        payload=b'bounded-memory\x00'*200000
+        (self.source/'tasks'/'large.bin').write_bytes(payload)
+        original=zipfile.ZipFile.read
+        def manifest_only(archive,name,*args,**kwargs):
+            self.assertEqual(name,'manifest.json')
+            return original(archive,name,*args,**kwargs)
+        with patch.object(Path,'read_bytes',side_effect=AssertionError('whole-file read')),patch.object(zipfile.ZipFile,'read',manifest_only):
+            backup(self.source,self.archive)
+            restore(self.archive,self.root/'restored')
+        self.assertEqual((self.root/'restored'/'tasks'/'large.bin').read_bytes(),payload)
+
+    def test_hardlinks_are_rejected(self):
+        external=self.root/'private.txt';external.write_text('private')
+        os.link(external,self.source/'tasks'/'linked.txt')
+        with self.assertRaisesRegex(ValueError,'하드링크'):backup(self.source,self.archive)
+        self.assertFalse(self.archive.exists())
+
+    def test_case_insensitive_exclusions(self):
+        (self.source/'model.key').rename(self.source/'MODEL.KEY')
+        (self.source/'VM').mkdir();(self.source/'VM'/'private.txt').write_text('private')
+        backup(self.source,self.archive)
+        with zipfile.ZipFile(self.archive) as z:
+            self.assertFalse(any(n.casefold()=='data/model.key' or n.casefold().startswith('data/vm/') for n in z.namelist()))
+        for name in ('MODEL.KEY','VM/private.txt','STATE.SQLITE3-WAL','Supervisor.JSON'):
+            self.write_archive(name,b'private')
+            with self.assertRaisesRegex(ValueError,'경로'):restore(self.archive,self.root/'new')
+            self.assertFalse((self.root/'new').exists())
+
+    def test_directory_case_alias_is_rejected(self):
+        files={'Folder/a':b'a','folder/b':b'b'}
+        with zipfile.ZipFile(self.archive,'w') as z:
+            for name,content in files.items():z.writestr('data/'+name,content)
+            z.writestr('manifest.json',json.dumps({'version':1,'files':{n:{'size':len(c),'sha256':hashlib.sha256(c).hexdigest()} for n,c in files.items()}}))
+        with self.assertRaisesRegex(ValueError,'충돌'):restore(self.archive,self.root/'new')
+        self.assertFalse((self.root/'new').exists())
