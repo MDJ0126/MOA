@@ -161,7 +161,10 @@ class VM:
             send('qmp_capabilities')
             identity=send('query-name')
             if not isinstance(identity,dict) or identity.get('name')!=session['name']:raise ValueError('이 프로젝트의 VM이 아닙니다.')
-            return send(command,arguments)
+            result=send(command,arguments)
+            if command=='query-status' and (not isinstance(result,dict) or not isinstance(result.get('status'),str) or not 1<=len(result['status'])<=80):
+                raise ValueError('VM 상태 응답 형식 오류')
+            return result
 
     def owner_record(self):
         value=read_setting(self.store,'vm_owner',None)

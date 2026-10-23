@@ -86,6 +86,19 @@ class VMTests(unittest.TestCase):
         from vm_runtime import settings
         self.assertTrue(settings(self.store)['enabled'])
 
+    def test_malformed_qmp_status_is_unreachable_and_preserves_session(self):
+        from unittest.mock import MagicMock
+        raw=json.dumps({'pid':123,'port':1,'name':'owned'})
+        self.vm.session_file.write_text(raw)
+        for result in (None,[],{}, {'status':False}):
+            sock=MagicMock();sock.__enter__.return_value=sock
+            sock.recv.side_effect=[json.dumps(frame).encode()+b'\n' for frame in ({'QMP':{}},{'return':{}},{'return':{'name':'owned'}},{'return':result})]
+            with self.subTest(result=result),patch('vm_runtime.socket.create_connection',return_value=sock):
+                status=self.vm.status()
+                self.assertEqual(status['state'],'unreachable');self.assertIn('상태 응답 형식',status['error'])
+                self.assertEqual(self.vm.session_file.read_text(),raw)
+                sock.__exit__.assert_called_once()
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent);self.store=Store(self.temp.name);self.vm=VM(self.store)
         self.project_patch=patch('vm_runtime.ROOT',Path(self.temp.name));self.project_patch.start();self.addCleanup(self.project_patch.stop)

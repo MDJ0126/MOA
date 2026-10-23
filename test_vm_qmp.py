@@ -30,6 +30,13 @@ class QMPTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'시간'):
             self.exchange(frames,clock=iter([0,0,1,6,7,8,9]).__next__)
 
+    def test_status_payload_is_checked_before_return(self):
+        for result in (None,[],{}, {'status':None},{'status':[]},{'status':1},{'status':''},{'status':'x'*81}):
+            with self.subTest(result=result),self.assertRaises(ValueError):
+                self.exchange([{'QMP':{}},{'return':{}},{'return':{'name':'owned'}},{'return':result}])
+        value,_=self.exchange([{'QMP':{}},{'return':{}},{'return':{'name':'owned'}},{'return':{'status':'future-state'}}])
+        self.assertEqual(value['status'],'future-state')
+
     def test_partial_bytes_do_not_extend_deadline(self):
         vm=VM.__new__(VM);sock=MagicMock();sock.__enter__.return_value=sock
         sock.recv.side_effect=[b'{',b'"QMP":{}',b'}\n']
