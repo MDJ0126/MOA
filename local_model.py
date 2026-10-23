@@ -19,6 +19,8 @@ def relevant_history(history,role,actor):
             value=json.loads(entry['content'])
             if not isinstance(value,dict):raise ValueError('handoff is not an object')
             if value.get('recipient') and value['recipient'] not in (role,actor):continue
+            if value.get('target_role') and value['target_role']!=role:continue
+            if entry.get('agent')=='user' and entry.get('recipient') and entry['recipient'] not in (role,actor):continue
             compact.append({'agent':entry['agent'],**{k:v for k,v in value.items() if k in ('summary','steps','criteria','passed')}})
         except (ValueError,TypeError):compact.append({'agent':entry['agent'],'summary':str(entry['content'])[:1500]})
     return compact[-6:]
@@ -27,7 +29,7 @@ class Llama:
     def __init__(self, model, url):
         self.model, self.url = model or 'qwen-local', url
 
-    def generate_file(self, task, target, files, log):
+    def generate_file(self, task, target, files, log, history=None):
         evidence=[]
         extension=Path(target).suffix.lower()
         language={'.py':'Python','.cs':'C#','.cpp':'C++','.h':'C++','.json':'JSON','.md':'Markdown','.txt':'plain text','.html':'HTML','.js':'JavaScript'}.get(extension,'the requested file format')
@@ -42,6 +44,7 @@ class Llama:
         reference=task.get('acceptance','') if is_test else ''
         prompt=f'User specification:\n{specification}\n\nFixed acceptance examples (read-only reference):\n{reference}\n'
         prompt+='\nAssigned agent preferences:\n'+task.get('agent',{}).get('instructions','')
+        prompt+='\nRecent task handoffs and addressed user instructions:\n'+json.dumps(history or [],ensure_ascii=False)
         if is_test:prompt+='\nActual implementation modules:\n'+json.dumps(evidence,ensure_ascii=False)
         verification=task.get('verification') or {}
         if verification.get('passed') is False:
@@ -69,7 +72,8 @@ class Llama:
             missing=(task.get('verification') or {}).get('missing_files',[])
             targets=required or missing
             if targets:
-                changed=[self.generate_file(task,p,files,log) for p in targets]
+                compact=relevant_history(history,role,task.get('agent',{}).get('id'))
+                changed=[self.generate_file(task,p,files,log,compact) for p in targets]
                 return {'summary':'실제 파일 저장 완료: '+', '.join(p['path'] for p in changed),'files':changed}
         props = {'summary':{'type':'string','maxLength':350}}
         required=['summary']

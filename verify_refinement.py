@@ -9,6 +9,7 @@ import time
 import urllib.request
 import urllib.error
 from app import Store
+from setup_config import save_team,PRESETS
 from test_runtime import node_executable
 
 ROOT=Path(__file__).resolve().parent
@@ -18,7 +19,7 @@ def request(path,data=None):
     with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
 
 with tempfile.TemporaryDirectory(dir=ROOT) as folder:
-    store=Store(folder);store.control('pause')
+    store=Store(folder);store.control('pause');save_team(store,PRESETS[0])
     with store.connect() as c:
         for i in range(635):c.execute('INSERT INTO tasks(id,title,mode,status,created) VALUES(?,?,?,?,?)',(f'{i:012x}',f'History {i:03d}','demo','completed',i))
         for i in range(405):c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',('000000000000','developer','handoff',f'log {i}',i))

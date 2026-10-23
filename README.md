@@ -8,6 +8,8 @@
 
 백업 요청 ID를 브라우저와 DB에 보존해 응답 유실 후 같은 요청을 확인·재전송할 수 있습니다. 설치·시작에 사용할 Python은 `MOA_PYTHON` 환경 변수로 지정할 수 있으며, Python 3.11 이상과 sqlite3·ssl을 실행 확인합니다. 지정하지 않은 경우 PATH, 기존 번들 순서로 확인합니다.
 
+팀원별 기록에는 보낸 메시지와 받은 지시·인계를 함께 표시하고, 새 메시지의 실행 역할과 수신자를 구분합니다. 추가 지시는 필수 파일 생성 경로에도 포함하며 팀 구성은 작업 등록 시점에 고정합니다. 저장된 보고서는 완료 시점의 스냅샷이고 최신 메모는 대화 JSON 내보내기로 받습니다.
+
 Python 3.11 이상으로 `python -m unittest -q`, `python verify_system.py`를 실행합니다. DOM 검증에는 Node.js 22 이상과 jsdom 27.4.0이 필요합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python verify_ui.py`, `python verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로, PATH, 기존 Codex 런타임 순서로 찾습니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `verify_vm_live.py`는 별도입니다.
 
 계획·개발·검증·보고 역할이 로컬 Qwen 모델을 순서대로 사용합니다. 컴퓨터 유즈는 사용하지 않습니다. 엔진은 추후 연결 대상이고 Slack은 설정 화면에서 선택적으로 연결합니다.

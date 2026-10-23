@@ -52,6 +52,13 @@ async function main(){
  const state=await(await fetch(base+'/api/state')).json();assert.equal(state.tasks[0].stage,2);
  assert.ok(state.messages.some(m=>m.agent==='maker'&&m.kind==='start'));
  click('[data-action="technical"]');assert.ok(d.querySelectorAll('.bubble-body.technical').length>0);
+ input('#messageText','담당자 수신 지시 테스트');click('[data-action="send-message"]');
+ await until(()=>d.querySelector('#modalLogs').textContent.includes('담당자 수신 지시 테스트'),'incoming member message');
+ input('#logAgent','maker','change');
+ assert.ok(d.querySelector('#modalLogs').textContent.includes('담당자 수신 지시 테스트'));
+ assert.ok([...d.querySelectorAll('.bubble-head b')].some(el=>el.textContent.includes('나')&&el.textContent.includes('→')));
+ assert.ok([...d.querySelectorAll('.bubble-head b')].some(el=>el.textContent.includes('개발')));
+ input('#logAgent','','change');
  click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
  const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
  click('[data-action="close-modal"]');

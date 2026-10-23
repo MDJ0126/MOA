@@ -18,7 +18,8 @@ from checks import run_checks
 from diagnostics import inspect_installation
 from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status
-from local_model import Llama
+from local_model import Llama,relevant_history
+from conversation import for_agent,enrich,task_messages
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
@@ -51,6 +52,10 @@ class Store:
                     'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER'}.items():
                 if name not in columns:c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.execute('UPDATE tasks SET revision_budget=MIN(5,max_revisions) WHERE revision_budget IS NULL')
+            message_columns={r[1] for r in c.execute('PRAGMA table_info(messages)')}
+            for name in ('recipient','capability'):
+                if name not in message_columns:c.execute(f"ALTER TABLE messages ADD COLUMN {name} TEXT DEFAULT ''")
+            c.execute('CREATE INDEX IF NOT EXISTS messages_task_seq ON messages(task_id,seq)')
             c.execute('''CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT,sender TEXT,recipient TEXT,content TEXT,created REAL)''')
             c.execute('''CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,10 +74,10 @@ class Store:
         finally:
             c.close()
 
-    def log(self, tid, agent, kind, content):
+    def log(self, tid, agent, kind, content,recipient='',capability=''):
         with self.connect() as c:
-            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',
-                      (tid, agent, kind, content, time.time()))
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',
+                      (tid, agent, kind, content, time.time(),recipient,capability))
 
     def add(self, title, mode, acceptance='', max_revisions=2, auto_recover=True, required_files=None,source_key=None,slack_context=None,environment='local',vm_actions=None,request_key=None):
         if not isinstance(title,str):raise ValueError('작업 내용은 문자열이어야 합니다.')
@@ -176,21 +181,29 @@ class Store:
             cursor=c.execute('INSERT INTO deliveries(task_id,sender,recipient,content,created) VALUES(?,?,?,?,?)',
                       (tid,sender,recipient,json.dumps(content,ensure_ascii=False),time.time()))
             c.execute('INSERT INTO outbox(delivery_id,payload) VALUES(?,?)',(cursor.lastrowid,json.dumps({'task_id':tid,'sender':sender,'recipient':recipient,'content':content},ensure_ascii=False)))
-            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,sender,'message',f'{sender} → {recipient}: '+json.dumps(content,ensure_ascii=False),time.time()))
-            if handoff is not None:c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,sender,'handoff',json.dumps(handoff,ensure_ascii=False),time.time()))
+            capability=content.get('capability','')
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'message',f'{sender} → {recipient}: '+json.dumps(content,ensure_ascii=False),time.time(),recipient,capability))
+            if handoff is not None:c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'handoff',json.dumps(handoff,ensure_ascii=False),time.time(),recipient,capability))
         return True
 
     def message(self,tid,recipient,content):
         with self.connect() as c:
             row=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
         if not row:raise ValueError('작업 없음')
-        agents=[a['id'] for a in (json.loads(row[0]) if row[0] else legacy_plan())['agents']]
+        plan=json.loads(row[0]) if row[0] else legacy_plan()
+        agents=[a['id'] for a in plan['agents']]
         if recipient not in (*ROLES,*agents) or not isinstance(content,str) or not content.strip() or len(content)>8000:
             raise ValueError('수신 역할 또는 메시지 오류')
+        target_role=''
+        if recipient not in agents:
+            target_role=recipient
+            recipient=plan['assignment'].get(recipient)
+            if not recipient:raise ValueError('이 작업에서 실행하지 않는 역할입니다. 배정된 팀원을 선택하세요.')
+        if recipient not in plan['assignment'].values():raise ValueError('이 작업에 배정되지 않은 팀원입니다. 배정된 담당자를 선택하세요.')
         with self.connect() as c:
             if not c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone():raise ValueError('작업 없음')
-        self.deliver(tid,'user',recipient,{'summary':content})
-        self.log(tid,'user','handoff',json.dumps({'recipient':recipient,'summary':content},ensure_ascii=False))
+        payload={'recipient':recipient,'summary':content,'target_role':target_role}
+        self.deliver(tid,'user',recipient,payload,handoff=payload)
 
 
 class LocalFiles:
@@ -260,7 +273,8 @@ Available tools: list; read(path); write(path,content) (developer only). Paths a
 Return one JSON object: {{"tool":"list|read|write","path":"...","content":"..."}}
 or {{"summary":"...","passed":true|false}} to finish. Reviewer must provide passed.
 Use tools to inspect evidence before approving. Changes stay in the task workspace.'''
-        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps({'task':task['title'], 'handoffs':history}, ensure_ascii=False)}]
+        system+='\nAssigned agent: '+json.dumps(task.get('agent',{}),ensure_ascii=False)
+        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps({'task':task['title'], 'handoffs':relevant_history(history,role,task.get('agent',{}).get('id')), 'verification':task.get('verification')}, ensure_ascii=False)}]
         read_evidence = False
         for _ in range(12):
             body = json.dumps({'model':self.model, 'messages':messages, 'stream':False,
@@ -314,17 +328,18 @@ class Worker:
                   'limitations':['엔진 미연결','Python 실행은 OS 보안 샌드박스가 아님']+([] if read_setting(s,'slack',{}).get('enabled') else ['Slack 미연결'])+(['데모: 실제 AI 추론 없음'] if task['mode']=='demo' else []),
                   'history':rows}
         folder.mkdir(parents=True,exist_ok=True)
-        (folder/'report.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
         plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
         manifest['team']=plan
         manifest['execution_environment']=plan.get('environment',{'kind':'local'})
         manifest['vm_evidence']=[str(p.relative_to(folder)).replace('\\','/') for p in (folder/'vm').glob('*.png')]
         manifest['vm_evidence_sha256']={name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in manifest['vm_evidence']}
         if manifest['execution_environment'].get('kind')=='vm':manifest['limitations'].append('VM 입력 전달·화면 기록 수행. 화면 목표 달성은 자동 판정하지 않음. 파일 생성·Python 검증은 호스트에서 실행.')
+        rows=[enrich(m,plan) for m in rows]
+        manifest['history']=rows
         (folder/'report.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
         for agent in set((*ROLES,*(a['id'] for a in plan['agents']),'system','user')):
             logs=folder/'agents'/agent;logs.mkdir(parents=True,exist_ok=True)
-            (logs/'messages.json').write_text(json.dumps([m for m in rows if m['agent']==agent],ensure_ascii=False,indent=2),encoding='utf-8')
+            (logs/'messages.json').write_text(json.dumps([m for m in rows if for_agent(m,agent,plan)],ensure_ascii=False,indent=2),encoding='utf-8')
         lines=[f'# {task["title"]}',f'작업: {tid} / 상태: {status} / 모델 모드: {task["mode"]}',
                f'수정 회차: {task["revision"]}', '## 검증',json.dumps(manifest['verification'],ensure_ascii=False,indent=2),
                '## 역할별 결과']
@@ -375,7 +390,7 @@ class Worker:
                     if paused or self.stop.is_set():
                         c.execute("UPDATE tasks SET status='queued' WHERE id=?", (tid,))
                         return True
-                    history = [dict(r) for r in c.execute("SELECT agent,content FROM messages WHERE task_id=? AND kind='handoff' ORDER BY seq", (tid,))]
+                    history = [dict(r) for r in c.execute("SELECT agent,content,recipient,capability FROM messages WHERE task_id=? AND kind='handoff' ORDER BY seq", (tid,))]
                 role = pipeline[stage];actor=assignment[role]
                 task['agent']=next(a for a in plan['agents'] if a['id']==actor)
                 self.checkpoint(tid,stage,task['revision'],files)
@@ -387,7 +402,7 @@ class Worker:
                     verification['source_hashes']=self.file_hashes(files)
                     if plan.get('environment',{}).get('kind')=='vm':verification['vm']={'input_scope':'QMP guest input and screenshots','visual_goal_verified':False,'file_checks_location':'host'}
                     task['verification']=verification
-                    s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False))
+                    s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False),capability=role)
                     with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(verification,ensure_ascii=False),tid))
                 else:
                     with s.connect() as c:
@@ -396,9 +411,9 @@ class Worker:
                     with s.connect() as c:c.execute("UPDATE tasks SET stage=?,status='queued',error='검증 이후 파일 변경: 재검증 필요' WHERE id=? AND status='running'",(pipeline.index('reviewer'),tid))
                     s.log(tid,'system','verification_invalidated','검증한 파일과 현재 파일의 해시가 다릅니다.')
                     return True
-                s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})')
+                s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})',capability=role)
                 with self.vm.stage(task,role,actor):
-                    result = backend.run(task, role, history, files, lambda kind, text: s.log(tid, actor, kind, text))
+                    result = backend.run(task, role, history, files, lambda kind, text: s.log(tid, actor, kind, text,capability=role))
                 with s.connect() as c:
                     if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':
                         s.log(tid,actor,'control','중단된 단계의 응답 수신. 다음 담당자에게 전달하지 않습니다.')
@@ -409,7 +424,7 @@ class Worker:
                     task['required_files']=json.dumps(required)
                     with s.connect() as c:c.execute('UPDATE tasks SET required_files=? WHERE id=?',(task['required_files'],tid))
                 if role == 'reviewer' and (result.get('passed') is not True or task['verification'].get('passed') is not True):
-                    feedback={'summary':result['summary'],'verification':task['verification'],'request':'실패 조건을 수정하고 다시 제출하세요.'}
+                    feedback={'summary':result['summary'],'verification':task['verification'],'request':'실패 조건을 수정하고 다시 제출하세요.','capability':role}
                     if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result):return True
                     if task['revision']<task['max_revisions']:
                         with s.connect() as c:
@@ -573,20 +588,26 @@ def serve(root, port, model, url):
                 with store.connect() as c:
                     task=c.execute('SELECT id,title,status,execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
                     if not task:self.send(404,{'error':'작업을 찾을 수 없습니다.'});return
-                    rows=[dict(row) for row in c.execute('SELECT * FROM messages WHERE task_id=?'+(' AND agent=?' if agent else '')+' ORDER BY seq LIMIT 50001',[tid,agent] if agent else [tid])]
+                    frozen=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
+                    rows=task_messages(c,tid,frozen,agent=agent)
                 if len(rows)>50000:self.send(413,{'error':'기록이 많습니다. 담당자별로 나누어 내보내 주세요.'});return
                 task_data=dict(task);task_data['execution_plan']=json.loads(task_data['execution_plan']) if task_data['execution_plan'] else legacy_plan()
                 self.send(200,{'format_version':1,'exported_at':time.time(),'task':task_data,'agent':agent or None,'count':len(rows),'messages':rows})
             elif self.path.startswith('/api/logs?'):
                 query=parse_qs(urlparse(self.path).query)
-                filters=[];args=[]
-                for key,column in [('task','task_id'),('agent','agent')]:
-                    if query.get(key):filters.append(column+'=?');args.append(query[key][0])
-                if query.get('before'):
-                    try:args.append(min(2**63-1,max(0,int(query['before'][0]))));filters.append('seq<?')
-                    except ValueError:self.send(400,{'error':'cursor 오류'});return
-                where=' WHERE '+' AND '.join(filters) if filters else ''
-                with store.connect() as c:rows=[dict(r) for r in c.execute('SELECT * FROM messages'+where+' ORDER BY seq DESC LIMIT 201',args)]
+                try:before=min(2**63-1,max(0,int(query['before'][0]))) if query.get('before') else None
+                except ValueError:self.send(400,{'error':'cursor 오류'});return
+                with store.connect() as c:
+                    if query.get('task'):
+                        tid=query['task'][0];task=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
+                        frozen=json.loads(task[0]) if task and task[0] else legacy_plan()
+                        rows=task_messages(c,tid,frozen,agent=query.get('agent',[''])[0],before=before,limit=201,descending=True)
+                    else:
+                        filters=[];args=[]
+                        if query.get('agent'):filters.append('agent=?');args.append(query['agent'][0])
+                        if before is not None:filters.append('seq<?');args.append(before)
+                        where=' WHERE '+' AND '.join(filters) if filters else ''
+                        rows=[dict(r) for r in c.execute('SELECT * FROM messages'+where+' ORDER BY seq DESC LIMIT 201',args)]
                 more=len(rows)>200;rows=rows[:200]
                 self.send(200,{'messages':rows,'next_cursor':rows[-1]['seq'] if more else None})
             elif self.path == '/':

@@ -61,7 +61,10 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             raise AssertionError('cross-site guard failed')
         except urllib.error.HTTPError as e:
             assert e.code==403
+        request('/api/control',{'action':'pause'})
         ids=[request('/api/tasks',{'title':f'HTTP 통합 검증 {i}','mode':'demo'})['id'] for i in range(2)]
+        request('/api/messages',{'id':ids[0],'recipient':'reviewer','content':'HTTP addressed instruction'})
+        request('/api/control',{'action':'resume'})
         for _ in range(100):
             state=request('/api/state')
             if len(state['tasks'])==2 and all(t['status']=='completed' for t in state['tasks']):break
@@ -74,7 +77,11 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             assert report['files'][0]['path']=='demo-result.md'
         export=request('/api/logs/export?task='+ids[0]);assert export['count']>0
         assert len(export['messages'])==export['count'] and all(m['task_id']==ids[0] for m in export['messages'])
-        filtered=request('/api/logs/export?task='+ids[0]+'&agent=planner');assert filtered['count']>0 and all(m['agent']=='planner' for m in filtered['messages'])
+        filtered=request('/api/logs/export?task='+ids[0]+'&agent=planner')
+        from conversation import for_agent
+        assert filtered['count']>0 and all(for_agent(m,'planner',export['task']['execution_plan']) for m in filtered['messages'])
+        incoming=request('/api/logs?task='+ids[0]+'&agent=reviewer')['messages']
+        assert any(m['agent']=='user' and 'HTTP addressed instruction' in m['content'] for m in incoming)
         invalid=urllib.request.Request(f'http://127.0.0.1:{port}/api/tasks',b'\xff',{'Content-Type':'application/json','X-Local-Agent':'1'})
         try:urllib.request.urlopen(invalid);raise AssertionError('invalid UTF-8 accepted')
         except urllib.error.HTTPError as error:assert error.code==400

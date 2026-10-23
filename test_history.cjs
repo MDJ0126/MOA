@@ -20,6 +20,7 @@ async function main(){
  const finalOlderButton=d.querySelector('#olderLogs');finalOlderButton.click();await until(()=>d.querySelectorAll('#modalLogs .bubble-row').length===405&&!finalOlderButton.disabled);
  assert.equal(d.querySelector('#olderLogs').hidden,true);
  assert.ok(d.querySelector('#modalTitle').textContent==='History 000');
+ assert.deepEqual([...d.querySelector('#messageRecipient').options].map(o=>o.value),['planner','developer','reviewer','reporter']);
  closing=true;for(const id of timers)originalClearTimeout(id);timers.clear();
  await until(()=>w.pendingActions()===0);
  console.log('PASS: DOM pagination, old task outside snapshot, 405 older conversations loaded with terminal cursor');

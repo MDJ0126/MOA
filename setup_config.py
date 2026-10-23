@@ -87,10 +87,15 @@ def save_team(store,value):
 
 def make_plan(store,tid):
     setup=team_settings(store)
-    assignment={}
+    assignment={};load={a['id']:0 for a in setup['agents']}
     for role in setup['pipeline']:
         candidates=[a for a in setup['agents'] if role in a['capabilities']]
-        assignment[role]=candidates[int(tid,16)%len(candidates)]['id']
+        if role=='reviewer' and any(a['id']!=assignment.get('developer') for a in candidates):
+            candidates=[a for a in candidates if a['id']!=assignment.get('developer')]
+        minimum=min(load[a['id']] for a in candidates)
+        candidates=[a for a in candidates if load[a['id']]==minimum]
+        selected=candidates[int(tid,16)%len(candidates)]['id']
+        assignment[role]=selected;load[selected]+=1
     return {'pipeline':setup['pipeline'],'agents':setup['agents'],'assignment':assignment}
 
 def legacy_plan():
