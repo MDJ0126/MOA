@@ -67,10 +67,16 @@ class OperationTests(unittest.TestCase):
         self.assertNotIn('title',json.dumps(result))
 
     def test_short_frozen_soak_is_not_a_24_hour_claim(self):
-        result=run(self.root/'soak',seconds=8,interval=.2,job_interval=.5)
+        result=run(self.root/'soak',seconds=8,interval=.2,job_interval=.5,keep_artifacts=1)
         self.assertEqual(result['status'],'completed',result.get('error'))
         self.assertGreater(result['verified_tasks'],0);self.assertFalse(result['demo_24h_observed'])
         self.assertFalse(result['actual_model_tested'])
+        self.assertGreater(result['pruned_tasks'],0)
+        retained=result['retained_artifacts'];self.assertEqual(len(retained),1)
+        self.assertEqual([p.name for p in (self.root/'soak/data/tasks').iterdir()],[retained[0]['task_id']])
+        with Store(self.root/'soak/data').connect() as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM tasks').fetchone()[0],result['verified_tasks'])
+            self.assertGreater(connection.execute('SELECT count(*) FROM messages').fetchone()[0],0)
         config=json.loads((self.root/'soak/source/config.json').read_text(encoding='utf-8'))
         self.assertEqual(config['model_url'],'http://127.0.0.1:0');self.assertEqual(config['default_mode'],'demo')
 
