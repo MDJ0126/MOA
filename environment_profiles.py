@@ -49,8 +49,8 @@ def recommend(value,host=None):
         ceiling=max(0,min(total*percent/100,total-6,free-2))
         memory=int(ceiling*1024//512)*512
     minimum={'windows':4096,'linux':2048,'macos':8192}.get(target,2048)
-    presets=[{'id':'light','memory_mb':minimum,'cpus':1},
-             {'id':'balanced','memory_mb':max(minimum,4096),'cpus':2},
+    presets=[{'id':'light','memory_mb':minimum,'cpus':2 if target=='windows' else 1},
+             {'id':'balanced','memory_mb':max(minimum,6144 if target=='windows' else 4096),'cpus':2},
              {'id':'development','memory_mb':max(minimum,8192),'cpus':4}]
     for preset in presets:
         preset['fits_now']=None if memory is None or cpu is None or location!='shared_vm' else preset['memory_mb']<=memory and preset['cpus']<=cpu

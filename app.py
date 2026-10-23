@@ -28,6 +28,7 @@ from artifacts import open_artifact,chunks,metadata as artifact_metadata,content
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict,validate_team
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 import environment_profiles
+import vbox_setup
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
 
 ROOT = Path(__file__).resolve().parent
@@ -636,6 +637,8 @@ def serve(root, port, model, url,demo_only=False):
                             if value.get('state') in ('waiting','completed','failed'):jobs.append({'file':path.name,'state':value['state'],'message':str(value.get('message',''))[:300]})
                         except (OSError,ValueError,AttributeError):continue
                 self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
+            elif self.path=='/api/vbox/setup':
+                self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None)})
             elif self.path=='/api/setup':
                 self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE,'execution_profile':environment_profiles.settings(store),'environment_recommendation':environment_profiles.recommend(environment_profiles.settings(store))})
             elif self.path=='/api/slack/recovery':
@@ -752,7 +755,7 @@ def serve(root, port, model, url,demo_only=False):
                     raise ValueError('요청 크기 제한')
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data,dict):raise ValueError('JSON 객체가 필요합니다.')
-                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
+                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input','/api/vbox/plan','/api/vbox/prepare'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
                 if self.path == '/api/tasks':
                     if demo_only and (data.get('mode',default_mode)!='demo' or data.get('environment','local')!='local'):raise ValueError('데모 전용 실행은 로컬 데모 작업만 접수합니다.')
                     self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'),expected_profile_updated=data.get('expected_profile_updated'))})
@@ -773,6 +776,10 @@ def serve(root, port, model, url,demo_only=False):
                     if folder.resolve()!=ROOT/'backups' or not archive.is_file() or archive.is_symlink() or archive.resolve().parent!=folder.resolve():raise ValueError('백업 파일을 찾을 수 없습니다.')
                     try:self.send(200,inspect_backup(archive))
                     except (zipfile.BadZipFile,sqlite3.Error,RuntimeError,NotImplementedError):raise ValueError('백업 ZIP 또는 데이터베이스가 손상되었거나 지원하지 않는 형식입니다.') from None
+                elif self.path=='/api/vbox/plan':
+                    self.send(200,vbox_setup.preview(store,worker.vm,data))
+                elif self.path=='/api/vbox/prepare':
+                    self.send(200,vbox_setup.prepare(store,worker.vm,data.get('plan_id')))
                 elif self.path=='/api/setup/execution-profile':
                     self.send(200,environment_profiles.save(store,data))
                 elif self.path=='/api/setup/execution-preview':

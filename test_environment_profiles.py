@@ -15,6 +15,7 @@ class EnvironmentProfilesTests(unittest.TestCase):
     def test_pressure_changes_recommendation_without_oversubscription(self):
         config={'target_os':'auto','location':'shared_vm','budget_percent':50}
         idle=recommend(config,self.host());self.assertEqual(idle['recommended'],'development')
+        self.assertTrue(all(p['cpus']>=2 for p in idle['presets']))
         pressure=recommend(config,self.host(available_ram_gib=4));self.assertIsNone(pressure['recommended'])
         self.assertEqual(pressure['memory_budget_mb'],2048)
         self.assertTrue(all(p['fits_now'] is False for p in pressure['presets']))
