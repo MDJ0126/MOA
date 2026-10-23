@@ -40,6 +40,17 @@ def manifest_object(pairs):
         value[key]=item
     return value
 
+def checked_backup_path(name,aliases):
+    parts=PurePosixPath(name).parts
+    reserved={'CON','PRN','AUX','NUL'}|{f'{prefix}{i}' for prefix in ('COM','LPT') for i in range(1,10)}
+    if not parts or PurePosixPath(name).as_posix()!=name or any(p in ('.','..') or p.endswith((' ','.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold()=='vm' or 'vbox-private' in tuple(p.casefold() for p in parts):
+        raise ValueError('잘못된 백업 경로입니다.')
+    for index in range(1,len(parts)+1):
+        prefix='/'.join(parts[:index]);folded=prefix.casefold()
+        if folded in aliases and aliases[folded]!=prefix:raise ValueError('대소문자 디렉터리 경로가 충돌합니다.')
+        aliases[folded]=prefix
+    return parts
+
 
 def backup(source, output):
     source, output = Path(source).resolve(), Path(output).resolve()
@@ -63,7 +74,7 @@ def backup(source, output):
                 original.backup(target)
                 target.execute('PRAGMA journal_mode=DELETE')
                 if target.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('백업 데이터베이스가 손상되었습니다.')
-            files = {}
+            files = {};aliases={}
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
                 for path in sorted(source.rglob('*')):
                     relative = path.relative_to(source)
@@ -76,6 +87,8 @@ def backup(source, output):
                     if path.is_file():
                         if path.stat(follow_symlinks=False).st_nlink!=1:raise ValueError('하드링크가 포함된 데이터는 백업하지 않습니다.')
                         name='state.sqlite3' if relative.as_posix().casefold()=='state.sqlite3' else relative.as_posix()
+                        if name in files:raise ValueError('중복 백업 경로입니다.')
+                        checked_backup_path(name,aliases)
                         actual=snapshot if name=='state.sqlite3' else path
                         digest=hashlib.sha256();size=0
                         with actual.open('rb') as stream,z.open('data/'+name,'w',force_zip64=True) as stored:
@@ -121,14 +134,7 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             for name, expected in files.items():
                 if not isinstance(expected, dict) or type(expected.get('size')) is not int or expected['size'] < 0 or not isinstance(expected.get('sha256'), str):
                     raise ValueError('잘못된 백업 파일 정보입니다.')
-                parts = PurePosixPath(name).parts
-                reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in range(1, 10)}
-                if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold() == 'vm' or 'vbox-private' in tuple(p.casefold() for p in parts):
-                    raise ValueError('잘못된 백업 경로입니다.')
-                for i in range(1,len(parts)+1):
-                    prefix='/'.join(parts[:i]);folded=prefix.casefold()
-                    if folded in aliases and aliases[folded]!=prefix:raise ValueError('대소문자 디렉터리 경로가 충돌합니다.')
-                    aliases[folded]=prefix
+                parts=checked_backup_path(name,aliases)
                 path = staged.joinpath(*parts)
                 if not _inside(path.resolve(), staged.resolve()):
                     raise ValueError('복원 폴더 밖 경로입니다.')
