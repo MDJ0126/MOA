@@ -60,6 +60,9 @@ class SlackService:
         with store.connect() as c:
             c.execute('CREATE TABLE IF NOT EXISTS slack_events(id TEXT PRIMARY KEY,created REAL)')
             c.execute("CREATE TABLE IF NOT EXISTS slack_inbox(id TEXT PRIMARY KEY,payload TEXT,connection_id TEXT,state TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,error TEXT DEFAULT '')")
+            c.execute('CREATE TABLE IF NOT EXISTS slack_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+            c.execute("INSERT OR IGNORE INTO slack_metadata VALUES('delivery_namespace',?)",(str(uuid.uuid4()),))
+            self.delivery_namespace=uuid.UUID(c.execute("SELECT value FROM slack_metadata WHERE key='delivery_namespace'").fetchone()[0])
 
     def enqueue(self,payload,connection):
         event_id=payload.get('event_id')
@@ -131,7 +134,12 @@ class SlackService:
         if not source:return None
         thread=event.get('thread_ts') or event.get('ts')
         if not thread:return None
+        instruction_key='slack_'+hashlib.sha256(source.encode('utf-8')).hexdigest()
         with self.store.connect() as c:
+            # A committed instruction can outlive the event acknowledgement and
+            # the task can finish before replay. Check its receipt before routing.
+            receipt=c.execute('SELECT d.task_id FROM message_requests r JOIN deliveries d ON d.id=r.delivery_id WHERE r.request_key=?',(instruction_key,)).fetchone()
+            if receipt:return receipt['task_id']
             prior=c.execute('SELECT id FROM tasks WHERE source_key=?',('slack:'+source,)).fetchone()
             if prior:
                 c.execute('INSERT OR IGNORE INTO slack_threads VALUES(?,?,?,?)',(prior['id'],channel,thread,connection['id']))
@@ -151,7 +159,7 @@ class SlackService:
             return existing['id']
         if existing and existing['status'] in ('queued','running'):
             recipient=connection['agent_id'] if connection['agent_id']!='shared' else 'developer'
-            self.store.message(existing['id'],recipient,text)
+            self.store.message(existing['id'],recipient,text,request_key=instruction_key)
             return existing['id']
         # Publish the task, assigned actor, and Slack thread in one commit so the
         # worker cannot claim it between creation and the actor/thread update.
@@ -177,7 +185,7 @@ class SlackService:
                 verification=content.get('verification') or {}
                 if verification.get('tests_run') is not None:text+=f" · 테스트 {verification['tests_run']}개 · {'통과' if verification.get('passed') else '확인 필요'}"
                 result=self.web[connection['id']].chat_postMessage(channel=row['channel'],thread_ts=thread or None,text=text[:3500],
-                    client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'local-agent-delivery:'+str(row['id']))),unfurl_links=False,unfurl_media=False)
+                    client_msg_id=str(uuid.uuid5(self.delivery_namespace,'local-agent-delivery:'+str(row['id']))),unfurl_links=False,unfurl_media=False)
                 with self.store.connect() as c:
                     c.execute("UPDATE outbox SET state='sent',receipt=? WHERE id=?",(result.get('ts',''),row['id']))
                     if not thread:c.execute('UPDATE slack_threads SET thread_ts=? WHERE task_id=?',(result['ts'],payload['task_id']))

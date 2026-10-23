@@ -117,6 +117,47 @@ class SetupTests(unittest.TestCase):
         second=self.store.add('event','demo',source_key='slack:one')
         self.assertEqual(first,second);self.assertEqual(len(self.store.snapshot()['tasks']),1)
 
+    def test_slack_instruction_replay_after_commit_and_task_completion(self):
+        service=SlackService(self.store);service.config=slack_config();connection=service.config['connections'][0]
+        def event(eid,text):return {'event_id':eid,'event':{'type':'app_mention','user':'U12345678','channel':'C12345678','text':text,'ts':'610.1','thread_ts':'610.1'}}
+        tid=service.receive(event('EvInitial','build'),connection)
+        original=self.store.message
+        def committed_then_crashed(*args,**kwargs):
+            original(*args,**kwargs)
+            raise RuntimeError('simulated crash before event acknowledgement')
+        payload=event('EvInstruction','keep the output concise')
+        with patch.object(self.store,'message',committed_then_crashed),self.assertRaises(RuntimeError):service.receive(payload,connection)
+        with self.store.connect() as c:
+            count=c.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0]
+            c.execute("UPDATE tasks SET status='completed' WHERE id=?",(tid,))
+        restarted=SlackService(Store(self.temp.name));restarted.config=slack_config()
+        self.assertEqual(restarted.receive(payload,connection),tid)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0],count)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],1)
+
+    def test_slack_delivery_ids_survive_reopen_and_differ_between_stores(self):
+        def send(store):
+            service=SlackService(store);service.config=slack_config();fake=FakeWeb();service.web={'shared':fake};service.flush()
+            return [p['client_msg_id'] for p in fake.posts]
+        def prepare(store):
+            save_slack(store,slack_config());tid=store.add('delivery identity','demo')
+            store.deliver(tid,'developer','reviewer',{'summary':'check'})
+        prepare(self.store);first=send(self.store);self.assertEqual(len(first),1)
+        with self.store.connect() as c:c.execute("UPDATE outbox SET state='pending'")
+        self.assertEqual(send(Store(self.temp.name)),first)
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as other:
+            store=Store(other);prepare(store)
+            self.assertNotEqual(send(store),first)
+
+    def test_slack_namespace_is_preserved_by_backup_restore(self):
+        from data_backup import backup,restore
+        original=SlackService(self.store).delivery_namespace
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as other:
+            archive=Path(other)/'backup.zip';destination=Path(other)/'restored'
+            backup(self.temp.name,archive);restore(archive,destination)
+            self.assertEqual(SlackService(Store(destination)).delivery_namespace,original)
+
     def test_malformed_team_values_are_rejected_without_attribute_errors(self):
         for value in ([],None,{'agents':[None]},dict(PRESETS[0],pipeline=[{}]),dict(PRESETS[0],agents=[{'id':'maker','name':None}])):
             with self.subTest(value=value),self.assertRaises(ValueError):save_team(self.store,value)
