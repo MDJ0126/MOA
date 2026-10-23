@@ -20,6 +20,7 @@ from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status
 from local_model import Llama,relevant_history
 from conversation import for_agent,enrich,task_messages
+from reports import publish,workspace_files
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
@@ -317,13 +318,13 @@ class Worker:
             task=dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
             rows=[dict(r) for r in c.execute('SELECT * FROM messages WHERE task_id=? ORDER BY seq',(tid,))]
         folder=s.root/'tasks'/tid
-        workspace=folder/'workspace'
-        manifest={'task_id':tid,'title':task['title'],'mode':task['mode'],'status':status,
+        workspace=(folder/'workspace').absolute()
+        manifest={'task_id':tid,'title':task['title'],'mode':task['mode'],'status':status,'report_id':uuid.uuid4().hex,'error':task['error'],
                   'model':CONFIG.get('model_description',self.model) if task['mode']!='demo' else 'demo-no-inference',
                   'model_file':CONFIG.get('model_file') if task['mode']=='llama' else None,
                   'system_source_sha256':SOURCE_HASH,
                   'revision':task['revision'],'verification':verification or json.loads(task['verification']),
-                  'files':[{'path':str(p.relative_to(workspace)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in workspace.rglob('*') if p.is_file() and '__pycache__' not in p.parts],
+                  'files':[{'path':str(p.relative_to(workspace)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in workspace_files(workspace)],
                   'slack_reporting_enabled':bool(read_setting(s,'slack',{}).get('enabled')),
                   'limitations':['엔진 미연결','Python 실행은 OS 보안 샌드박스가 아님']+([] if read_setting(s,'slack',{}).get('enabled') else ['Slack 미연결'])+(['데모: 실제 AI 추론 없음'] if task['mode']=='demo' else []),
                   'history':rows}
@@ -336,34 +337,22 @@ class Worker:
         if manifest['execution_environment'].get('kind')=='vm':manifest['limitations'].append('VM 입력 전달·화면 기록 수행. 화면 목표 달성은 자동 판정하지 않음. 파일 생성·Python 검증은 호스트에서 실행.')
         rows=[enrich(m,plan) for m in rows]
         manifest['history']=rows
-        (folder/'report.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
-        for agent in set((*ROLES,*(a['id'] for a in plan['agents']),'system','user')):
-            logs=folder/'agents'/agent;logs.mkdir(parents=True,exist_ok=True)
-            (logs/'messages.json').write_text(json.dumps([m for m in rows if for_agent(m,agent,plan)],ensure_ascii=False,indent=2),encoding='utf-8')
-        lines=[f'# {task["title"]}',f'작업: {tid} / 상태: {status} / 모델 모드: {task["mode"]}',
-               f'수정 회차: {task["revision"]}', '## 검증',json.dumps(manifest['verification'],ensure_ascii=False,indent=2),
-               '## 역할별 결과']
-        lines += [f'### {m["agent"]}\n{m["content"]}' for m in rows if m['kind']=='handoff']
-        lines += ['## 미연결·제한',*manifest['limitations']]
-        (folder/'report.md').write_text('\n\n'.join(lines),encoding='utf-8')
-        with zipfile.ZipFile(folder/'artifacts.zip','w',zipfile.ZIP_DEFLATED) as bundle:
-            for p in workspace.rglob('*'):
-                if p.is_file() and '__pycache__' not in p.parts:bundle.write(p,'workspace/'+str(p.relative_to(workspace)))
-            bundle.write(folder/'report.json','report.json');bundle.write(folder/'report.md','report.md')
-            for p in (folder/'vm').glob('*.png'):bundle.write(p,'vm/'+p.name)
+        hashes=manifest['verification'].get('source_hashes')
+        manifest['verification_matches_files']=hashes=={item['path']:item['sha256'] for item in manifest['files']} if isinstance(hashes,dict) else None
+        if status=='completed' and manifest['verification_matches_files'] is False:raise ValueError('검증 후 파일이 변경되어 완료 보고서를 발행하지 않습니다.')
+        publish(folder,workspace,manifest)
 
     def checkpoint(self,tid,stage,revision,files):
         folder=files.folder.parent/'checkpoints'/f'r{revision}-{stage}'
         folder.mkdir(parents=True,exist_ok=True)
-        for p in files.folder.rglob('*'):
-            if p.is_file() and '__pycache__' not in p.parts:
-                target=folder/p.relative_to(files.folder);target.parent.mkdir(parents=True,exist_ok=True)
-                target.write_bytes(p.read_bytes())
+        for p in workspace_files(files.folder):
+            target=folder/p.relative_to(files.folder);target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(p.read_bytes())
         self.store.log(tid,'system','checkpoint',str(folder))
 
     def file_hashes(self,files):
         return {str(p.relative_to(files.folder)):hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in files.folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
+                for p in workspace_files(files.folder)}
 
     def tick(self):
         s = self.store
@@ -513,7 +502,7 @@ def serve(root, port, model, url):
                 except (OSError,ValueError):state['supervisor']=None
                 self.send(200,state)
             elif self.path=='/api/diagnostics':
-                self.send(200,inspect_installation(ROOT,CONFIG,SDK_AVAILABLE))
+                self.send(200,{**inspect_installation(ROOT,CONFIG,SDK_AVAILABLE),'app_source_sha256':SOURCE_HASH})
             elif self.path.startswith('/api/backups/request?'):
                 key=parse_qs(urlparse(self.path).query).get('key',[''])[0]
                 try:result=request_status(store,ROOT,key)

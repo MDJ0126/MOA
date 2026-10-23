@@ -15,15 +15,18 @@ def headers(url):
 def relevant_history(history,role,actor):
     compact=[]
     for entry in history:
+        if entry.get('agent')=='user' and entry.get('recipient') and entry['recipient'] not in (role,actor):continue
         try:
             value=json.loads(entry['content'])
             if not isinstance(value,dict):raise ValueError('handoff is not an object')
             if value.get('recipient') and value['recipient'] not in (role,actor):continue
             if value.get('target_role') and value['target_role']!=role:continue
-            if entry.get('agent')=='user' and entry.get('recipient') and entry['recipient'] not in (role,actor):continue
             compact.append({'agent':entry['agent'],**{k:v for k,v in value.items() if k in ('summary','steps','criteria','passed')}})
         except (ValueError,TypeError):compact.append({'agent':entry['agent'],'summary':str(entry['content'])[:1500]})
-    return compact[-6:]
+    # Repeated implementation/review handoffs must not evict recent user instructions.
+    user=[i for i,value in enumerate(compact) if value['agent']=='user'][-3:]
+    other=[i for i,value in enumerate(compact) if value['agent']!='user'][-(6-len(user)):]
+    return [compact[i] for i in sorted(user+other)]
 
 class Llama:
     def __init__(self, model, url):
