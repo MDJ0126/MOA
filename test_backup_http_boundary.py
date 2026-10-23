@@ -10,6 +10,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+import zipfile
 from urllib.error import HTTPError
 import urllib.request
 from app import Store
@@ -41,6 +42,16 @@ class BackupHttpBoundaryTests(unittest.TestCase):
                             if process.poll() is not None:self.fail('isolated app exited')
                             time.sleep(.05)
                     else:self.fail('isolated app readiness timeout')
+                    nested=project/'backups'/'nested.zip'
+                    with zipfile.ZipFile(nested,'w',zipfile.ZIP_DEFLATED) as output:
+                        output.writestr('manifest.json','{"version":1,"files":{},"extra":'+'['*20000+'0'+']'*20000+'}')
+                    original=nested.read_bytes()
+                    with self.assertRaises(HTTPError) as rejected:request('/api/backups/inspect',{'name':nested.name})
+                    self.assertEqual(rejected.exception.code,400)
+                    self.assertIn('중첩',json.load(rejected.exception)['error']);rejected.exception.close()
+                    self.assertEqual(nested.read_bytes(),original)
+                    self.assertEqual(request('/api/health')['app']['pid'],process.pid)
+                    nested.unlink()
                     for kind in ('status-link','archive-link','oversize')+(('locked-status',) if os.name=='nt' else ()):
                         with self.subTest(kind=kind),ExitStack() as held:
                             archive.unlink(missing_ok=True);status.unlink(missing_ok=True)

@@ -166,7 +166,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 raise ValueError('중복 파일 또는 복원 크기 제한 초과입니다.')
             if z.getinfo('manifest.json').file_size > 16 * 1024**2:
                 raise ValueError('백업 목록이 너무 큽니다.')
-            manifest = json.loads(z.read('manifest.json'),object_pairs_hook=manifest_object)
+            try:manifest = json.loads(z.read('manifest.json'),object_pairs_hook=manifest_object)
+            except RecursionError:raise ValueError('백업 목록의 중첩이 너무 깊습니다.') from None
             if not isinstance(manifest, dict) or type(manifest.get('version')) is not int or manifest['version'] != 1 or not isinstance(manifest.get('files'), dict):
                 raise ValueError('지원하지 않는 백업입니다.')
             files = manifest['files']

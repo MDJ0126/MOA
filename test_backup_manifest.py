@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -34,6 +35,12 @@ class BackupManifestTests(unittest.TestCase):
         value={**self.manifest,'version':True};self.replace_manifest(json.dumps(value))
         with self.assertRaisesRegex(ValueError,'지원'):restore(self.archive,self.root/'restored')
         self.assertFalse((self.root/'restored').exists())
+    def test_deeply_nested_manifest_is_rejected_without_publishing(self):
+        depth=max(20000,sys.getrecursionlimit()*20)
+        self.replace_manifest('{"version":1,"files":{},"extra":'+'['*depth+'0'+']'*depth+'}')
+        original=self.archive.read_bytes()
+        with self.assertRaisesRegex(ValueError,'백업 목록'):restore(self.archive,self.root/'restored')
+        self.assertFalse((self.root/'restored').exists());self.assertEqual(self.archive.read_bytes(),original)
     def test_generated_manifest_still_roundtrips(self):
         restored=self.root/'restored';restore(self.archive,restored)
         with Store(restored).connect() as connection:self.assertEqual(connection.execute('SELECT count(*) FROM tasks').fetchone()[0],0)
