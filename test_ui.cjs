@@ -12,7 +12,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup'&&setupFailures-->0)throw Error('Simulated startup offline');
  if(path==='/api/setup'){const value=await(await fetch(base+path,options)).json();value.hardware={...value.hardware,cpu:'',logical_cpus:null,ram_gib:null};return new Response(JSON.stringify(value))}
  if(path==='/api/docs/slack'&&docFailure)return new Response('{}',{status:503});
- if(path==='/api/tasks'&&loseTaskResponse){loseTaskResponse=false;const response=await fetch(base+path,options);await response.arrayBuffer();throw Error('Simulated response lost after commit')}
+ if(path==='/api/tasks'&&loseTaskResponse){const response=await fetch(base+path,options);if(!response.ok)return response;loseTaskResponse=false;await response.arrayBuffer();throw Error('Simulated response lost after commit')}
  if(path==='/api/slack/test')return new Response(JSON.stringify({ok:true,checks:[{workspace:'UI test workspace',channel:'agent-room'}]}),{headers:{'Content-Type':'application/json'}});
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
@@ -74,7 +74,11 @@ async function main(){
  click('[data-preset="compact"]');click('#saveTeam');
  await until(()=>d.querySelectorAll('.agent-card').length===1,'compact saved');
  w.location.hash='home';await until(()=>!d.querySelector('#page-home').hidden,'home navigation');
- input('#taskTitle','DOM 시험: <script>alert(1)</script> 작업');input('#taskMode','demo','change');click('#submitTask');
+ input('#taskTitle','DOM 시험: <script>alert(1)</script> 작업');input('#taskMode','demo','change');input('#requiredFiles','NUL.txt');click('#submitTask');
+ await until(()=>requests.some(r=>r.path==='/api/tasks')&&!d.querySelector('#submitTask').disabled,'invalid file submission finished');
+ assert.equal((await(await fetch(base+'/api/state')).json()).tasks.length,0);
+ assert.equal(d.querySelector('#requiredFiles').value,'NUL.txt');assert.ok(d.querySelector('#taskTitle').value.includes('DOM 시험'));
+ input('#requiredFiles','');click('#submitTask');
  await until(()=>d.querySelector('#toast').textContent.includes('response lost'),'unknown submission outcome');
  assert.ok(d.querySelector('#taskTitle').value.includes('DOM 시험'));click('#submitTask');
  await until(()=>!d.querySelector('#taskModal').hidden,'task modal');
@@ -143,7 +147,7 @@ async function main(){
  assert.ok(!d.querySelector('#vmEvidence').textContent.includes('obsolete-view.png'));w.fetch=viewFetch;await w.testRefresh();
  }
  click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
- const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
+ const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,3);assert.equal(taskRequests[0].body.required_files[0],'NUL.txt');assert.equal(taskRequests[1].body.request_key,taskRequests[2].body.request_key);assert.notEqual(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
  click('[data-action="close-modal"]');
  w.location.hash='work';await until(()=>!d.querySelector('#page-work').hidden&&d.querySelectorAll('#allTasks [data-task]').length===1,'server task list');
  input('#taskSearch','없는 제목');await until(()=>d.querySelector('#workCount').textContent==='0개 작업','server search empty');
