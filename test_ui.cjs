@@ -134,6 +134,11 @@ async function main(){
  assert.deepEqual([...d.querySelector('#taskEnvironment').options].map(option=>option.value),['local','profile','vm']);
  d.querySelector('#maintenanceOptions').open=true;click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
  await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');
+ assert.ok(d.querySelector('#installationChecks').textContent.includes('서버 변경 적용'));
+ const sourceFetch=w.fetch;let sourceControls=0;
+ w.fetch=async(path,options)=>{if(path==='/api/control')sourceControls++;if(path==='/api/diagnostics')return new Response(JSON.stringify({checks:[{id:'application_sources',label:'서버 변경 적용',state:'restart',detail:'서버 시작 뒤 파일이 바뀌었습니다.'}],disk_free_gib:10,scope:'fixture'}),{headers:{'Content-Type':'application/json'}});return sourceFetch(path,options)};
+ click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('재시작 필요'),'restart required diagnostic');assert.equal(sourceControls,0);w.fetch=sourceFetch;
+
  click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');
  const installationFetch=w.fetch;
  w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({files:3,tasks:2,messages:7,restored:false}),{headers:{'Content-Type':'application/json'}}):installationFetch(path,options);

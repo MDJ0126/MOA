@@ -18,7 +18,7 @@ from supervisor import ManagedChild,acquire,write_status
 from app_lifecycle import request_stop
 
 ROOT=Path(__file__).resolve().parent
-MODULES=('app_lifecycle','stop_app','private_files','vbox_install','vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
+MODULES=('source_state','app_lifecycle','stop_app','private_files','vbox_install','vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
 
 
 def freeze(destination):

@@ -16,6 +16,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checks import run_checks
 from diagnostics import inspect_installation
+from source_state import SourceState,diagnostic_check
 from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status,list_backups
 from local_model import Llama,relevant_history
@@ -38,6 +39,7 @@ SOURCE_HASH=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 ROLES = ('planner', 'developer', 'reviewer', 'reporter')
 LABELS = dict(zip(ROLES, ('계획', '개발', '검증', '보고')))
 CONFIG=json.loads((ROOT/'config.json').read_text(encoding='utf-8')) if (ROOT/'config.json').exists() else {}
+SOURCE_STATE=SourceState(ROOT)
 
 
 def has_vm_input(plan,role):
@@ -722,7 +724,7 @@ def serve(root, port, model, url,demo_only=False):
             if self.headers.get('Host') not in (f'127.0.0.1:{port}',f'localhost:{port}'):
                 self.send(403,{'error':'host rejected'});return
             if self.path=='/api/health':
-                self.send(200,{**health_status(store,worker,thread,server_started,instance),'app_source_sha256':SOURCE_HASH})
+                self.send(200,{**health_status(store,worker,thread,server_started,instance),'app_source_sha256':SOURCE_HASH,'source_status':SOURCE_STATE.inspect()})
             elif self.path == '/api/state':
                 state = store.snapshot(limit=600)
                 state['model'] = model or '미설정'
@@ -739,7 +741,8 @@ def serve(root, port, model, url,demo_only=False):
                 except (OSError,ValueError):state['supervisor']=None
                 self.send(200,state)
             elif self.path=='/api/diagnostics':
-                self.send(200,{**inspect_installation(ROOT,CONFIG,SDK_AVAILABLE),'app_source_sha256':SOURCE_HASH})
+                result=inspect_installation(ROOT,CONFIG,SDK_AVAILABLE);source=SOURCE_STATE.inspect(force=True);result['checks'].append(diagnostic_check(source))
+                self.send(200,{**result,'app_source_sha256':SOURCE_HASH,'source_status':source})
             elif self.path.startswith('/api/backups/request?'):
                 key=parse_qs(urlparse(self.path).query).get('key',[''])[0]
                 try:result=request_status(store,ROOT,key)
