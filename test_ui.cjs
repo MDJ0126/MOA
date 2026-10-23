@@ -16,7 +16,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.testAPI=api;window.testBackupRecovery=recoverBackupRequest;');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -59,6 +59,11 @@ async function main(){
  assert.ok([...d.querySelectorAll('.bubble-head b')].some(el=>el.textContent.includes('나')&&el.textContent.includes('→')));
  assert.ok([...d.querySelectorAll('.bubble-head b')].some(el=>el.textContent.includes('개발')));
  input('#logAgent','','change');
+ const retryFetch=w.fetch,retryState=await(await fetch(base+'/api/state')).json();retryState.tasks[0]={...retryState.tasks[0],status:'queued',error:'모델 서버 일시 오류',retry_at:Date.now()/1000+45};
+ w.fetch=async(path,options)=>path==='/api/state'?new Response(JSON.stringify(retryState),{headers:{'Content-Type':'application/json'}}):retryFetch(path,options);
+ await w.testRefresh();assert.ok(d.querySelector('#modalLogs').textContent.includes('자동 재시도 대기'));
+ retryState.paused=true;await w.testRefresh();assert.ok(d.querySelector('#modalLogs').textContent.includes('일시 중지 해제 후'));
+ w.fetch=retryFetch;await w.testRefresh();
  click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
  const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
  click('[data-action="close-modal"]');

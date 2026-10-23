@@ -1,13 +1,13 @@
 """Structured role inference against the locally installed llama.cpp server."""
 import json
 import urllib.request
-from urllib.parse import urlparse
 from pathlib import Path
+from model_transport import request_json,completion,model_output,ModelError,validate_url
 
 def headers(url):
     result={'Content-Type':'application/json'}
     key=Path(__file__).resolve().parent/'data'/'model.key'
-    target=urlparse(url)
+    target=validate_url(url)
     if key.exists() and target.hostname in ('127.0.0.1','localhost') and target.port==8766:
         result['Authorization']='Bearer '+key.read_text(encoding='utf-8').strip()
     return result
@@ -60,12 +60,11 @@ class Llama:
                              {'role':'user','content':prompt}],
                  'response_format':{'type':'json_schema','json_schema':{'name':'source_file','strict':True,'schema':schema}}}
         req=urllib.request.Request(self.url+'/v1/chat/completions',json.dumps(payload).encode(),headers(self.url))
-        with urllib.request.urlopen(req,timeout=240) as response:result=json.load(response)
-        raw=result['choices'][0]['message']['content']
+        result=request_json(req,timeout=240);raw,finish=completion(result)
         log('model',json.dumps({'target':target,'response':raw,'usage':result.get('usage'),'timings':result.get('timings')},ensure_ascii=False))
-        if result['choices'][0].get('finish_reason')=='length':raise ValueError('파일 생성 응답이 잘렸습니다: '+target)
-        content=json.loads(raw)['content']
-        if not isinstance(content,str) or not content.strip():raise ValueError('빈 파일 생성 응답')
+        if finish=='length':raise ValueError('파일 생성 응답이 잘렸습니다: '+target)
+        content=model_output(raw).get('content')
+        if not isinstance(content,str) or not content.strip():raise ModelError('invalid_model_output','모델이 비어 있거나 잘못된 파일 내용을 반환했습니다. 작업 내용을 구체화한 뒤 다시 시도하세요.')
         log('tool',files.execute({'tool':'write','path':target,'content':content},True))
         return {'path':target,'content':content}
 
@@ -117,13 +116,11 @@ All file paths must stay relative to the assigned workspace. Prior failures must
         payload={'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(context,ensure_ascii=False)}],
                  'temperature':0.1,'max_tokens':2200 if role=='developer' else 700,'response_format':{'type':'json_schema','json_schema':{'name':role,'strict':True,'schema':schema}}}
         req=urllib.request.Request(self.url+'/v1/chat/completions',json.dumps(payload).encode(),headers(self.url))
-        with urllib.request.urlopen(req,timeout=240) as response:
-            result=json.load(response)
-        raw=result['choices'][0]['message']['content']
+        result=request_json(req,timeout=240);raw,finish=completion(result)
         log('model',json.dumps({'response':raw,'usage':result.get('usage'),'timings':result.get('timings')},ensure_ascii=False))
-        if result['choices'][0].get('finish_reason')=='length':
+        if finish=='length':
             raise ValueError('모델 응답이 토큰 한도에서 잘렸습니다. 작업을 작게 나누거나 컨텍스트/출력 한도를 조정하세요.')
-        action=json.loads(raw)
+        action=model_output(raw)
         if not isinstance(action.get('summary'),str) or not action['summary'].strip():raise ValueError('빈 모델 응답')
         if role=='developer':
             if not action.get('files'):raise ValueError('개발 담당이 변경 파일을 생성하지 않았습니다.')
