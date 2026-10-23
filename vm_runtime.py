@@ -1,6 +1,7 @@
 """One project-owned headless QEMU desktop with exclusive per-agent access."""
 from contextlib import contextmanager,ExitStack
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -143,6 +144,18 @@ class VM:
             if send('query-name').get('name')!=session['name']:raise ValueError('이 프로젝트의 VM이 아닙니다.')
             return send(command,arguments)
 
+    def owner_record(self):
+        value=read_setting(self.store,'vm_owner',None)
+        if value is None:return None
+        if not isinstance(value,dict) or any(not isinstance(value.get(key),str) or not 1<=len(value[key])<=200 for key in ('task_id','agent','role')):raise ValueError('VM 사용권 기록 형식 오류')
+        if value['role'] not in ('planner','developer','reviewer','reporter'):raise ValueError('VM 사용권 역할 오류')
+        clean={key:value[key] for key in ('task_id','agent','role')}
+        if 'since' in value:
+            since=value['since']
+            if type(since) not in (int,float) or not math.isfinite(since) or since<0:raise ValueError('VM 사용권 시각 오류')
+            clean['since']=since
+        return clean
+
     def status(self):
         config=settings(self.store);state='stopped';error=''
         try:
@@ -150,14 +163,17 @@ class VM:
             if pending:raise ValueError('VM 시작 확인이 끝나지 않았습니다. 기존 VM 종료 여부와 실행 기록을 확인하세요.')
             if session:state=self.qmp('query-status')['status']
         except (OSError,ValueError) as e:error=str(e);state='unreachable'
-        lease=read_setting(self.store,'vm_owner',None)
+        owner_unavailable=False
+        try:lease=self.owner_record()
+        except (ValueError,TypeError,OverflowError,RecursionError):
+            lease=None;owner_unavailable=True;state='unreachable';error='VM 사용권 기록을 읽지 못했습니다. 원본을 보존했습니다. 데이터 백업과 실행 상태를 확인하세요.'
         if lease and not self.thread_lock.locked():
             # Test the OS lock too: another worker process may own the desktop.
             try:
                 with self.exclusive():lease=None
             except BusyVM:pass
             except (OSError,ValueError) as exc:state='unreachable';error=str(exc)
-        return {'state':state,'owner':lease,'error':error,'installed':(ROOT/'runtime/qemu/qemu-system-x86_64.exe').is_file(),
+        return {'state':state,'owner':lease,'owner_unavailable':owner_unavailable,'error':error,'installed':(ROOT/'runtime/qemu/qemu-system-x86_64.exe').is_file(),
                 'iso_exists':(ROOT/config['iso']).is_file(),'config':config,'shared':True,
                 'scope':'VM 화면 입력·캡처만 격리합니다. 모델 추론과 파일 생성·Python 검증은 호스트에서 실행합니다.'}
 

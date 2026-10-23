@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -26,6 +26,10 @@ async function main(){
  await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
  assert.equal(d.querySelector('#machineCpu').textContent,'CPU 정보 미확인');
  assert.equal(d.querySelector('#hardwareSummary').textContent,'CPU 정보 미확인');
+ w.testVMStatus({state:'unreachable',owner:null,owner_unavailable:true,error:'fixture owner record unavailable'});
+ assert.equal(d.querySelector('#vmOwner').textContent,'사용권 기록 확인 필요');
+ assert.equal(d.querySelector('[data-action="capture-vm"]').disabled,true);
+ await w.testRefresh();
  assert.equal(d.querySelector('#onboarding').hidden,false);
  const waiting={id:'wait-check',title:'waiting',mode:'demo',status:'queued',wait_reason:'vm_access',stage:0,created:Date.now()/1000,retry_at:Date.now()/1000+1};assert.ok(w.waitRow(waiting).includes('데모'));assert.ok(w.waitRow(waiting).includes('VM 사용권 대기'));assert.ok(w.waitNotice(waiting).includes('VM 사용권 대기'));
  assert.equal(d.querySelector('#profileOS').value,'auto');
