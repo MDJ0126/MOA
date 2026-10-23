@@ -25,7 +25,7 @@ from supervisor import write_status
 from health import status as health_status
 from model_transport import request_json,ollama_text,model_output,ModelError,RETRY_STATUSES,validate_url
 from artifacts import open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
-from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
+from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict,validate_team
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
 
@@ -39,6 +39,23 @@ CONFIG=json.loads((ROOT/'config.json').read_text(encoding='utf-8')) if (ROOT/'co
 def has_vm_input(plan,role):
     env=plan.get('environment',{})
     return env.get('kind')=='vm' and any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[]))
+
+
+def checked_plan(task):
+    plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
+    if not isinstance(plan,dict):raise ValueError('실행 계획 객체 오류')
+    clean=validate_team({'agents':plan.get('agents'),'pipeline':plan.get('pipeline')})
+    pipeline=clean['pipeline'];assignment=plan.get('assignment')
+    if not isinstance(assignment,dict) or task['mode'] not in ('demo','llama','ollama') or type(task['stage']) is not int or not 0<=task['stage']<len(pipeline):raise ValueError('실행 단계 오류')
+    agents={a['id']:a for a in clean['agents']}
+    for role in pipeline:
+        actor=assignment.get(role)
+        if not isinstance(actor,str) or actor not in agents or role not in agents[actor]['capabilities']:raise ValueError('단계 담당자 오류')
+    environment=plan.get('environment',{'kind':'local'})
+    if not isinstance(environment,dict) or environment.get('kind','local') not in ('local','vm'):raise ValueError('실행 환경 오류')
+    validate_actions(environment.get('actions',[]),pipeline)
+    if environment.get('kind')=='vm' and not isinstance(environment.get('config'),dict):raise ValueError('VM 설정 오류')
+    return plan
 
 
 class Store:
@@ -162,7 +179,8 @@ class Store:
                 task=c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone()
                 if not task or task['status'] not in ('failed','interrupted'):
                     raise ValueError('실패 또는 중단된 작업만 재개할 수 있습니다.')
-                plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
+                try:plan=checked_plan(task)
+                except (ValueError,TypeError,KeyError,IndexError,AttributeError):raise ValueError('저장된 실행 계획·단계를 확인하지 못했습니다. 원래 요청을 확인해 새 작업으로 등록하세요.') from None
                 stage=task['stage']
                 if task['status']=='failed':stage=min(stage,plan['pipeline'].index('developer'))
                 revision=task['revision']+1
@@ -331,11 +349,9 @@ class Worker:
             for row in c.execute("SELECT * FROM tasks WHERE status IN ('running','interrupted')").fetchall():
                 error='이전 실행 중 종료됨. 파일과 기록 확인 후 재개하세요.'
                 try:
-                    frozen=json.loads(row['execution_plan']) if row['execution_plan'] else legacy_plan()
+                    frozen=checked_plan(row)
                     pipeline=frozen['pipeline']
-                    if not isinstance(pipeline,list) or any(r not in ROLES for r in pipeline) or type(row['stage']) is not int or not 0<=row['stage']<len(pipeline):raise ValueError()
                     role=pipeline[row['stage']]
-                    if not any(a['id']==frozen['assignment'][role] for a in frozen['agents']):raise ValueError()
                     blocked=has_vm_input(frozen,role)
                     if blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError):
@@ -399,14 +415,20 @@ class Worker:
                 except (ValueError,TypeError,AttributeError):blocked=True
                 if blocked:
                     c.execute("UPDATE tasks SET status='interrupted',error='데모 전용 실행에서 실제 AI·VM 작업을 보류했습니다.' WHERE id=? AND status='queued'",(task['id'],));return True
+            try:plan=checked_plan(task)
+            except (ValueError,TypeError,KeyError,IndexError,AttributeError):
+                message='저장된 실행 계획·단계를 확인하지 못해 작업을 보류했습니다.'
+                c.execute('BEGIN IMMEDIATE')
+                if c.execute("UPDATE tasks SET status='interrupted',error=? WHERE id=? AND status='queued'",(message,task['id'])).rowcount:
+                    c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(task['id'],'system','error',message,time.time()))
+                return True
             if c.execute("UPDATE tasks SET status='running' WHERE id=? AND status='queued'", (task['id'],)).rowcount!=1:return True
         tid = task['id']
-        plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
         pipeline=plan['pipeline'];assignment=plan['assignment']
-        files = LocalFiles(s.root / 'tasks' / tid / 'workspace')
-        backend = Demo() if task['mode'] == 'demo' else Llama(self.model,self.url) if task['mode']=='llama' else Ollama(self.model, self.url)
         role=None
         try:
+            files = LocalFiles(s.root / 'tasks' / tid / 'workspace')
+            backend = Demo() if task['mode'] == 'demo' else Llama(self.model,self.url) if task['mode']=='llama' else Ollama(self.model, self.url)
             for stage in range(task['stage'], len(pipeline)):
                 with s.connect() as c:
                     state = c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]
@@ -414,7 +436,7 @@ class Worker:
                     if state == 'cancelled':
                         return True
                     if paused or self.stop.is_set():
-                        c.execute("UPDATE tasks SET status='queued' WHERE id=?", (tid,))
+                        c.execute("UPDATE tasks SET status='queued' WHERE id=? AND status='running'", (tid,))
                         return True
                     history = [dict(r) for r in c.execute("SELECT agent,content,recipient,capability FROM messages WHERE task_id=? AND kind='handoff' ORDER BY seq", (tid,))]
                 role = pipeline[stage];actor=assignment[role]
@@ -496,7 +518,7 @@ class Worker:
             if not retry:
                 with s.connect() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]=='failed':self.package(tid,'failed',task.get('verification'))
+                    if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]=='failed':self.package(tid,'failed',task.get('verification') if isinstance(task.get('verification'),dict) else None)
             return True
 
     def loop(self):
