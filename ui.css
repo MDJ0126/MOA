@@ -12,3 +12,5 @@
 .vm-screen{width:100%;max-height:560px;object-fit:contain;object-position:left top;background:#111;border-radius:10px;cursor:crosshair;border:1px solid var(--line)}#vmEvidence{padding-top:12px;max-height:200px;overflow:auto}.tabs{flex-wrap:wrap}#vmOwner{color:var(--green-dark);font-size:12px}
 
 .vm-screen{height:auto;max-height:none}
+
+details.settings-section>summary{font-size:15px;font-weight:600;cursor:pointer;color:var(--ink)}details.settings-section[open]>summary{margin-bottom:20px}#taskOptionsSummary{font-size:12px;font-weight:400}#taskProfile{margin-left:auto;max-width:55%;white-space:normal;line-height:1.5;text-align:right}

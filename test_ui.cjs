@@ -24,6 +24,13 @@ function input(selector,value,event='input'){const node=d.querySelector(selector
 async function main(){
  await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
  assert.equal(d.querySelector('#onboarding').hidden,false);
+ await until(()=>d.querySelector('#taskProfile').textContent.includes('데모'),'server default mode shown');
+ assert.equal(d.querySelector('#taskMode').value,'demo');assert.equal(d.querySelector('#taskOptions').open,false);
+ input('#taskMode','ollama','change');await w.testRefresh();assert.equal(d.querySelector('#taskMode').value,'ollama');assert.ok(d.querySelector('#taskProfile').textContent.includes('Ollama'));
+ d.querySelector('#taskOptions').open=true;input('#taskEnvironment','vm','change');input('#requiredFiles','one.py\ntwo.py');input('#acceptance','assert True');
+ d.querySelector('#taskOptions').open=false;assert.ok(d.querySelector('#taskProfile').textContent.includes('공유 VM'));assert.ok(d.querySelector('#taskOptionsSummary').textContent.includes('파일 2개'));assert.ok(d.querySelector('#taskOptionsSummary').textContent.includes('고정 검증'));assert.equal(d.querySelector('#requiredFiles').value,'one.py\ntwo.py');
+ input('#requiredFiles','');input('#acceptance','');input('#taskEnvironment','local','change');input('#taskMode','demo','change');assert.equal(d.querySelector('#taskOptionsSummary').textContent,'');
+
  click('[data-action="recommended"]');await until(()=>!d.querySelector('#page-settings').hidden,'settings navigation');
  assert.equal(d.querySelectorAll('.agent-editor').length,2);
  input('#agent-name-0','저장 전 이름');assert.ok(d.querySelector('#teamSaveState').textContent.includes('저장하지'));
@@ -106,6 +113,7 @@ async function main(){
  await until(()=>d.querySelector('[data-connection-field="bot_token"]').value==='','clear saved token field');
  assert.ok(d.querySelector('[data-connection-field="bot_token"]').placeholder.includes('저장된'));
  w.location.hash='settings/environment';await until(()=>!d.querySelector('#panel-environment').hidden,'shared environment tab');
+ assert.equal(d.querySelector('#vmAdvanced').open,false);assert.equal(d.querySelector('#vmManualControls').open,false);assert.equal(d.querySelector('#maintenanceOptions').open,false);assert.equal(d.querySelector('#vmMemory').closest('details').id,'vmAdvanced');d.querySelector('#vmAdvanced').open=true;
  assert.equal(d.querySelector('#vmMemory').value,'512');
  input('#vmMemory','1024','change');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#toast').textContent.includes('VM 환경을 저장'),'VM configuration save');
@@ -120,7 +128,7 @@ async function main(){
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#settingsConflict').hidden,'VM reviewed conflict save');
  assert.equal((await(await fetch(base+'/api/vm')).json()).config.memory_mb,2048);
  assert.equal(d.querySelector('#taskEnvironment').options.length,2);
- click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
+ d.querySelector('#maintenanceOptions').open=true;click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
  await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');
  click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');
  const installationFetch=w.fetch;
