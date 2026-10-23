@@ -107,7 +107,7 @@ Python으로 `-m unittest -v`, `verify_system.py`를 실행하면 단위/HTTP �
 
 ## 소스 전용 재현 검증
 
-`python verify_clean_install.py --ui`는 모델·VM·앱 데이터를 복사하지 않은 임시 소스에서 전체 단위 테스트와 DOM·대량 기록 검증을 실행하고 정리합니다. 호스트 Python과 Node/jsdom 검증 도구는 사용합니다. Node 경로는 MOA_NODE, jsdom 경로는 MOA_JSDOM으로 지정할 수 있습니다. UI 검증을 제외하려면 --ui를 생략하세요. VM 설정 테스트의 ISO는 부팅할 수 없는 임시 검증 파일이며 실제 VM을 실행하지 않습니다.
+`python verify_clean_install.py --ui`는 모델·VM·앱 데이터를 복사하지 않은 임시 소스에서 전체 단위 테스트, HTTP 순차 실행·산출물·백업·재시작, DOM·대량 기록 검증을 실행하고 정리합니다. 호스트 Python과 Node/jsdom 검증 도구는 사용합니다. Node 경로는 MOA_NODE, jsdom 경로는 MOA_JSDOM으로 지정할 수 있습니다. UI 검증을 제외하려면 --ui를 생략하세요. VM 설정 테스트의 ISO는 부팅할 수 없는 임시 검증 파일이며 실제 VM을 실행하지 않습니다.
 
 
 ### 사용 가이드 화면 갱신

@@ -11,8 +11,10 @@ from socket import socket
 import uuid
 import hashlib
 import os
-from app import Store
+from contextlib import ExitStack
+from app import Store,Worker
 from data_backup import backup
+from soak import freeze
 
 root = Path(__file__).resolve().parent
 with socket() as sock:
@@ -20,6 +22,7 @@ with socket() as sock:
     port = sock.getsockname()[1]
 
 def request(path, data=None, header=True):
+    if process.poll() is not None:raise RuntimeError('격리 검증 서버가 종료되었습니다.')
     headers = {'Content-Type':'application/json'}
     if header:
         headers['X-Local-Agent']='1'
@@ -29,16 +32,20 @@ def request(path, data=None, header=True):
         body=r.read()
         return json.loads(body) if 'application/json' in r.headers.get('Content-Type','') else body
 
-with tempfile.TemporaryDirectory(dir=root) as folder:
+with ExitStack() as resources:
+    temporary=resources.enter_context(tempfile.TemporaryDirectory(dir=root))
+    root=Path(temporary)/'source';freeze(root)
+    folder=Path(temporary)/'data';folder.mkdir()
+    log=resources.enter_context((Path(temporary)/'server.log').open('wb'))
     args=[sys.executable,str(root/'app.py'),'--port',str(port),'--data',folder]
-    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    process=subprocess.Popen(args,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     try:
         for _ in range(100):
             try:
                 request('/api/state');break
             except (urllib.error.URLError,ConnectionError):
                 if process.poll() is not None:
-                    raise RuntimeError(process.communicate())
+                    raise RuntimeError((Path(temporary)/'server.log').read_text(encoding='utf-8',errors='replace')[-4000:])
                 time.sleep(.05)
         else:
             raise RuntimeError('서버 시작 실패')
@@ -46,7 +53,10 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
         setup=request('/api/setup');assert len(setup['presets'])==3
         observed=request('/api/health');assert observed['app']['pid']==process.pid and observed['worker']['thread_alive'] is True
         assert observed['version']==1 and 'scope' in observed and 'active' in observed['queue']
-        diagnosis=request('/api/diagnostics');assert diagnosis['version']==1 and len(diagnosis['checks'])==5
+        diagnosis=request('/api/diagnostics');assert diagnosis['version']==1
+        checks={item['id']:item for item in diagnosis['checks']}
+        assert len(checks)==len(diagnosis['checks']) and {'python','model_file','runtime_executable','slack_sdk','vm_runtime','application_sources'}<=checks.keys()
+        assert checks['application_sources']['state']=='ready' and diagnosis['source_status']['state']=='matching'
         fixture=Store(Path(folder)/'backup-fixture')
         archive=root/'backups'/('test-'+uuid.uuid4().hex+'.zip')
         try:
@@ -80,9 +90,19 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             report=json.loads((Path(folder)/'tasks'/tid/'report.json').read_text(encoding='utf-8'))
             assert report['files'][0]['path']=='demo-result.md'
         artifact_url='/api/artifact?task='+ids[0]+'&file=report.md'
-        report_path=Path(folder)/'tasks'/ids[0]/'report.md';original_report=report_path.read_bytes()
-        payload=b'large-report-line\n'*150000;report_path.write_bytes(payload)
+        task_store=Store(folder)
+        summary=json.dumps({'summary':'large report fixture '+'x'*1000})
+        with task_store.connect() as c:
+            c.executemany('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',[(ids[0],'planner','handoff',summary,time.time(),'developer','planner') for _ in range(2300)])
+        Worker(task_store,model='',url='http://127.0.0.1:0').package(ids[0],'completed')
+        report_path=Path(folder)/'tasks'/ids[0]/'report.md';payload=report_path.read_bytes()
+        assert len(payload)>2*1024**2,'published large-report fixture is too small'
+        secret=Path(folder)/'private-test.txt'
         try:
+            report_path.write_bytes(payload+b'changed after publication')
+            try:request(artifact_url);raise AssertionError('changed artifact served')
+            except urllib.error.HTTPError as error:assert error.code==404
+            report_path.write_bytes(payload)
             req=urllib.request.Request(f'http://127.0.0.1:{port}'+artifact_url,method='HEAD')
             with urllib.request.urlopen(req,timeout=3) as response:
                 assert int(response.headers['Content-Length'])==len(payload) and response.read()==b''
@@ -90,13 +110,13 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
                 assert 'moa-'+ids[0] in response.headers['Content-Disposition']
             assert hashlib.sha256(request(artifact_url)).digest()==hashlib.sha256(payload).digest()
             assert any(f['name']=='report.md' for f in request('/api/artifacts?task='+ids[0])['files'])
-            secret=Path(folder)/'private-test.txt';secret.write_text('PRIVATE_TEST_MARKER');report_path.unlink();os.link(secret,report_path)
+            secret.write_bytes(payload);report_path.unlink();os.link(secret,report_path)
             try:
                 request(artifact_url);raise AssertionError('hardlink artifact served')
-            except urllib.error.HTTPError as error:assert error.code==404 and b'PRIVATE_TEST_MARKER' not in error.read()
+            except urllib.error.HTTPError as error:assert error.code==404 and len(error.read())<1000
             assert 'report.md' not in {f['name'] for f in request('/api/artifacts?task='+ids[0])['files']}
         finally:
-            report_path.unlink(missing_ok=True);report_path.write_bytes(original_report)
+            report_path.unlink(missing_ok=True);report_path.write_bytes(payload);secret.unlink(missing_ok=True)
         req=urllib.request.Request(f'http://127.0.0.1:{port}/api/vm/screen',method='HEAD')
         try:urllib.request.urlopen(req);raise AssertionError('unsafe HEAD route allowed')
         except urllib.error.HTTPError as error:assert error.code==405
@@ -111,16 +131,19 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
         try:urllib.request.urlopen(invalid);raise AssertionError('invalid UTF-8 accepted')
         except urllib.error.HTTPError as error:assert error.code==400
         assert request('/api/tasks?page='+str(10**40))['tasks']==[]
-        second=subprocess.run(args,capture_output=True,timeout=5)
+        second=subprocess.run(args,capture_output=True,timeout=5,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         assert second.returncode!=0, 'second worker must be rejected'
         process.terminate();process.wait(timeout=5)
-        process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        process=subprocess.Popen(args,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         for _ in range(100):
             try:
                 state=request('/api/state');break
             except (urllib.error.URLError,ConnectionError):time.sleep(.05)
+        else:raise AssertionError('restart failed')
+        assert {task['id'] for task in state['tasks']}==set(ids)
         assert all(t['status']=='completed' for t in state['tasks'])
-        assert len([m for m in state['messages'] if m['kind']=='start'])==8
+        history=[message for tid in ids for message in request('/api/logs/export?task='+tid)['messages']]
+        assert len([m for m in history if m['kind']=='start'])==8
         scheduled=request('/api/backups/create',{})
         process.wait(timeout=5)
         assert process.returncode==0
@@ -132,7 +155,7 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             else:raise AssertionError('scheduled backup did not complete')
             from data_backup import inspect_backup
             assert inspect_backup(saved)['tasks']==2
-            process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            process=subprocess.Popen(args,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             for _ in range(100):
                 try:
                     recovered=request('/api/backups/request?key='+scheduled['request_key']);break

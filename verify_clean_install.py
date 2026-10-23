@@ -24,6 +24,8 @@ def main(ui=False):
         assert not any((project/name).exists() for name in ('data','data-demo','models','runtime'))
         result=subprocess.run([sys.executable,'-m','unittest','-q'],cwd=project,timeout=240)
         if result.returncode:return result.returncode
+        result=subprocess.run([sys.executable,'verify_system.py'],cwd=project,timeout=90)
+        if result.returncode:return result.returncode
         if ui:
             from test_runtime import node_executable
             environment=dict(os.environ,MOA_NODE=node_executable())
