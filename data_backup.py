@@ -15,6 +15,18 @@ from supervisor import acquire, write_status
 SKIP = {'worker.lock', 'supervisor.lock', 'supervisor.stop', 'supervisor.json', 'model.key','state.sqlite3-wal','state.sqlite3-shm'}
 CHUNK_SIZE=64*1024
 
+def publish_restored(staged,destination):
+    """Bound Windows sharing failures without replacing an existing destination."""
+    delays=(.05,.15,.3)
+    for attempt in range(len(delays)+1):
+        if os.path.lexists(destination):raise ValueError('복원 대상이 이미 생성되었습니다.')
+        try:
+            staged.rename(destination)
+            return
+        except OSError as error:
+            if os.name!='nt' or getattr(error,'winerror',None) not in (5,32,33) or attempt==len(delays):raise
+            time.sleep(delays[attempt])
+
 class BusyBackup(ValueError):pass
 
 
@@ -138,9 +150,7 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                     value = json.loads(row[0]); value['enabled'] = False
                     c.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(value), key))
         # Windows rename refuses an existing destination; never replace user data.
-        if destination.exists():
-            raise ValueError('복원 대상이 이미 생성되었습니다.')
-        staged.rename(destination)
+        publish_restored(staged,destination)
     return len(files)
 
 
