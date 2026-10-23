@@ -33,14 +33,32 @@ def enrich(message,plan):
     return value
 
 
+def history_plan(raw):
+    from setup_config import legacy_plan,validate_team
+    if raw is None or raw=='':return legacy_plan()
+    try:
+        plan=json.loads(raw)
+        if not isinstance(plan,dict):return None
+        clean=validate_team({'agents':plan.get('agents'),'pipeline':plan.get('pipeline')})
+        assignment=plan.get('assignment')
+        if not isinstance(assignment,dict):return None
+        agents={a['id']:a for a in clean['agents']}
+        for role in clean['pipeline']:
+            actor=assignment.get(role)
+            if not isinstance(actor,str) or actor not in agents or role not in agents[actor]['capabilities']:return None
+        return plan
+    except (ValueError,TypeError,UnicodeError,OverflowError):return None
+
+
 def task_messages(connection,tid,plan,agent='',limit=50001,before=None,descending=False):
     query='SELECT * FROM messages WHERE task_id=?';args=[tid]
     if before is not None:query+=' AND seq<?';args.append(before)
     query+=' ORDER BY seq'+(' DESC' if descending else '')
     result=[]
     for row in connection.execute(query,args):
-        message=enrich(row,plan)
-        if not agent or for_agent(message,agent,plan):
+        message=enrich(row,plan) if plan is not None else dict(row)
+        matches=for_agent(message,agent,plan) if plan is not None else (message['agent']==agent or recipient_of(message)==agent or message['agent']=='user' and message['kind']=='instruction' and not recipient_of(message))
+        if not agent or matches:
             result.append(message)
             if len(result)>=limit:break
     return result

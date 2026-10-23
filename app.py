@@ -19,7 +19,7 @@ from diagnostics import inspect_installation
 from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status
 from local_model import Llama,relevant_history
-from conversation import for_agent,enrich,task_messages
+from conversation import for_agent,enrich,task_messages,history_plan
 from reports import publish,workspace_files,hash_file
 from supervisor import write_status
 from health import status as health_status
@@ -85,6 +85,9 @@ def public_task(row):
     for field in ('pending_instruction_stage','instruction_review_required'):
         if isinstance(task.get(field),(bytes,bytearray,memoryview)):
             task[field]='바이너리 형식 오류';invalid.append(field)
+    raw=task.get('execution_plan');frozen=history_plan(raw)
+    if frozen is None:task['execution_plan_unavailable']=True
+    if isinstance(raw,(bytes,bytearray,memoryview)):task['execution_plan']=json.dumps(frozen,ensure_ascii=False) if frozen is not None else None
     if invalid:task['invalid_instruction_fields']=invalid
     return task
 
@@ -833,11 +836,11 @@ def serve(root, port, model, url,demo_only=False):
                 with store.connect() as c:
                     task=c.execute('SELECT id,title,status,execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
                     if not task:self.send(404,{'error':'작업을 찾을 수 없습니다.'});return
-                    frozen=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
+                    frozen=history_plan(task['execution_plan'])
                     rows=task_messages(c,tid,frozen,agent=agent)
                 if len(rows)>50000:self.send(413,{'error':'기록이 많습니다. 담당자별로 나누어 내보내 주세요.'});return
-                task_data=dict(task);task_data['execution_plan']=json.loads(task_data['execution_plan']) if task_data['execution_plan'] else legacy_plan()
-                self.send(200,{'format_version':1,'exported_at':time.time(),'task':task_data,'agent':agent or None,'count':len(rows),'messages':rows})
+                task_data=dict(task);task_data['execution_plan']=frozen
+                self.send(200,{'plan_unavailable':frozen is None,'format_version':1,'exported_at':time.time(),'task':task_data,'agent':agent or None,'count':len(rows),'messages':rows})
             elif self.path.startswith('/api/logs?'):
                 query=parse_qs(urlparse(self.path).query)
                 try:before=min(2**63-1,max(0,int(query['before'][0]))) if query.get('before') else None
@@ -845,7 +848,8 @@ def serve(root, port, model, url,demo_only=False):
                 with store.connect() as c:
                     if query.get('task'):
                         tid=query['task'][0];task=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
-                        frozen=json.loads(task[0]) if task and task[0] else legacy_plan()
+                        if not task:self.send(404,{'error':'작업을 찾을 수 없습니다.'});return
+                        frozen=history_plan(task[0])
                         rows=task_messages(c,tid,frozen,agent=query.get('agent',[''])[0],before=before,limit=201,descending=True)
                     else:
                         filters=[];args=[]
@@ -854,7 +858,7 @@ def serve(root, port, model, url,demo_only=False):
                         where=' WHERE '+' AND '.join(filters) if filters else ''
                         rows=[dict(r) for r in c.execute('SELECT * FROM messages'+where+' ORDER BY seq DESC LIMIT 201',args)]
                 more=len(rows)>200;rows=rows[:200]
-                self.send(200,{'messages':rows,'next_cursor':rows[-1]['seq'] if more else None})
+                self.send(200,{'messages':rows,'plan_unavailable':bool(query.get('task')) and frozen is None,'next_cursor':rows[-1]['seq'] if more else None})
             elif self.path == '/':
                 self.send(200,(ROOT/'dashboard.html').read_bytes(),'text/html; charset=utf-8')
             elif self.path in ('/ui.css','/ui.js'):
