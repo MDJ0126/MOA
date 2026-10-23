@@ -83,6 +83,27 @@ async function main(){
  assert.equal(d.querySelectorAll('#modalTitle script').length,0);
  await until(()=>d.querySelector('a[href*="artifacts.zip"]'),'available artifact links');
  const state=await(await fetch(base+'/api/state')).json();assert.equal(state.tasks[0].stage,2);
+ {
+ const beforeRefreshFetch=w.fetch,latest=structuredClone(state),older=structuredClone(state);latest.paused=true;older.paused=false;
+ for(const failOld of [false,true]){
+  let releaseOld,rejectOld,calls=0;
+  w.fetch=(path,options)=>{if(path==='/api/state'){if(calls++===0)return new Promise((resolve,reject)=>{releaseOld=resolve;rejectOld=reject});return Promise.resolve(new Response(JSON.stringify(latest)))}return beforeRefreshFetch(path,options)};
+  const pending=w.testRefresh();await until(()=>releaseOld,'older state pending');await w.testRefresh();
+  assert.equal(d.querySelector('#pauseButton').textContent,'계속 실행');
+  if(failOld)rejectOld(Error('OLD_STATE_FAILURE'));else releaseOld(new Response(JSON.stringify(older)));
+  await assert.doesNotReject(pending,'obsolete refresh must not surface as a current failure');
+  assert.equal(d.querySelector('#pauseButton').textContent,'계속 실행','older state must not revert the latest pause control');
+ }
+ w.fetch=path=>path==='/api/state'?Promise.resolve(new Response(JSON.stringify({error:'LATEST_STATE_FAILURE'}),{status:503})):beforeRefreshFetch(path);
+ await assert.rejects(w.testRefresh(),/LATEST_STATE_FAILURE/);
+ let releaseBackupState;
+ w.fetch=path=>path==='/api/state'?new Promise(resolve=>{releaseBackupState=resolve}):beforeRefreshFetch(path);
+ const beforeBackup=w.testRefresh();await until(()=>releaseBackupState,'state pending before backup acknowledgement');
+ d.querySelector('#backupCreateState').dataset.accepted='fixture';releaseBackupState(new Response(JSON.stringify(older)));await beforeBackup;
+ assert.equal(d.querySelector('#pauseButton').textContent,'계속 실행','accepted backup must stop pending state updates');
+ delete d.querySelector('#backupCreateState').dataset.accepted;
+ w.fetch=beforeRefreshFetch;await w.testRefresh();
+ }
  assert.ok(state.messages.some(m=>m.agent==='maker'&&m.kind==='start'));
  click('[data-action="technical"]');assert.ok(d.querySelectorAll('.bubble-body.technical').length>0);
  input('#messageText','완료 작업 추가 지시');click('[data-action="send-message"]');
