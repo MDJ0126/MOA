@@ -16,3 +16,5 @@
 details.settings-section>summary{font-size:15px;font-weight:600;cursor:pointer;color:var(--ink)}details.settings-section[open]>summary{margin-bottom:20px}#taskOptionsSummary{font-size:12px;font-weight:400}#taskProfile{margin-left:auto;max-width:55%;white-space:normal;line-height:1.5;text-align:right}
 
 .vm-step{border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}.vm-step .connection-heading{margin-bottom:10px}.vm-step .text-button{padding:4px 8px}.vm-step textarea{min-height:70px}
+
+.guide-shot{margin:22px 0}.guide-shot img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:12px}.guide-shot figcaption{font-size:12px;color:var(--muted);margin-top:8px}.guide-steps{padding-left:22px}.guide-steps li{margin:12px 0}.guide-more{border-top:1px solid var(--line);margin-top:26px;padding-top:18px}.guide-more>summary{cursor:pointer;font-weight:600}.guide-more>div{padding-top:16px}

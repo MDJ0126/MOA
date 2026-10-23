@@ -642,6 +642,13 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(200,manifest())
             elif self.path=='/api/docs':
                 self.send(200,json.loads((ROOT/'docs'/'index.json').read_text(encoding='utf-8')))
+            elif self.path.startswith('/guide-images/'):
+                name=self.path.removeprefix('/guide-images/')
+                allowed={'home.png','team.png','work.png','task.png','slack.png','environment.png','actions.png','diagnostics.png','backup.png','operations.png'}
+                folder=ROOT/'docs'/'screenshots';path=folder/name
+                if name not in allowed or not path.is_file() or path.is_symlink() or folder.resolve()!=ROOT/'docs'/'screenshots' or path.resolve().parent!=folder or path.stat().st_nlink!=1:
+                    self.send(404,{'error':'가이드 이미지를 찾을 수 없습니다.'});return
+                self.send(200,path.read_bytes(),'image/png')
             elif self.path.startswith('/api/docs/'):
                 slug=self.path.removeprefix('/api/docs/')
                 index=json.loads((ROOT/'docs'/'index.json').read_text(encoding='utf-8'))

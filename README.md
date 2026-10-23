@@ -108,3 +108,10 @@ Python으로 `-m unittest -v`, `verify_system.py`를 실행하면 단위/HTTP �
 ## 소스 전용 재현 검증
 
 `python verify_clean_install.py --ui`는 모델·VM·앱 데이터를 복사하지 않은 임시 소스에서 전체 단위 테스트와 DOM·대량 기록 검증을 실행하고 정리합니다. 호스트 Python과 Node/jsdom 검증 도구는 사용합니다. Node 경로는 MOA_NODE, jsdom 경로는 MOA_JSDOM으로 지정할 수 있습니다. UI 검증을 제외하려면 --ui를 생략하세요. VM 설정 테스트의 ISO는 부팅할 수 없는 임시 검증 파일이며 실제 VM을 실행하지 않습니다.
+
+
+### 사용 가이드 화면 갱신
+
+가이드는 실제 앱 스크린샷과 핵심 3단계로 구성합니다. 설치 명령·예외 설명은 접힌 상세에 둡니다. 개인 작업·토큰이 없는 체험용 데이터로 촬영하며 Slack·모델·VM에는 연결하지 않습니다.
+
+스크린샷을 다시 만들 때는 개발 도구 Playwright 1.62.1과 설치된 Chrome/Edge를 사용합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund playwright@1.62.1`로 준비하고 `MOA_BROWSER`에 설치된 브라우저 실행 파일 경로를 지정한 뒤 `python capture_guides.py`를 실행하세요. 별도 Playwright 경로는 `MOA_PLAYWRIGHT`로 지정합니다. 이 명령은 새 헤드리스 프로필을 사용하고 기존 브라우저 창·프로필은 조작하지 않습니다. 결과는 `docs/screenshots`, 소스/이미지 해시와 촬영 시각은 그 안의 `manifest.json`에 저장합니다. 새 OS·실제 AI·Slack·VM 화면 업무 성공 검증을 대신하지 않습니다.

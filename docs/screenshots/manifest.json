@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "kind": "actual UI screenshots with sample demo data",
+  "viewport": {
+    "width": 1440,
+    "height": 1040
+  },
+  "browser": "155.0.8059.86",
+  "guideChecks": [
+    "getting-started",
+    "team",
+    "slack",
+    "environment",
+    "tasks",
+    "models",
+    "operations",
+    "troubleshooting",
+    "privacy"
+  ],
+  "files": [
+    "actions.png",
+    "backup.png",
+    "diagnostics.png",
+    "environment.png",
+    "home.png",
+    "operations.png",
+    "slack.png",
+    "task.png",
+    "team.png",
+    "work.png"
+  ],
+  "captured_at": "2026-10-23T07:03:46.796285+00:00",
+  "source_sha256": {
+    "dashboard.html": "b7ee6b97c9adf0152440c9201cbc4155dbec09bba5074e40bdce64e2506e1e44",
+    "ui.js": "e7df6633d7bc3f354a8df78a28787069577c592219e7b188b50e24c0c4eda849",
+    "ui.css": "1182c70fd6c93d498210c56894e842213ce52bce216e6f809ebd4a7d0677e1f0"
+  },
+  "image_sha256": {
+    "actions.png": "ad55b676ab21edf11bfbab1fcca2fb9bc297254630d33c10ae7f506995bb0534",
+    "backup.png": "76240e26abffb6cb96cf04eca0aba58c896d2265ab66fc41b8f5dbf9d7c8245e",
+    "diagnostics.png": "9d0cd8ba4d0e7999936545b24486a3dd0614c80a81f5ca52b846b21a0ca27f60",
+    "environment.png": "1295ed48646e00ad0c3175c31c6486a9a7de1ce9d3a34e22aed18c2caa8603a2",
+    "home.png": "53a753559596e786988562208fd320b18ebff671c985b4361ea36db87b5c0862",
+    "operations.png": "e6f4ed0939fcfb646bb433088de2298a3a9f7bfe1e88d8ee36097d32bb81a90b",
+    "slack.png": "67b5ded353950768423fe13b38d87be1a7d67a53d7862fb786d087e355dca736",
+    "task.png": "e49434e1b5e4c6014e1378e1687779485f10b58a74a92ef12d11fa166172a432",
+    "team.png": "8c7233a825e4e41d49bdaebe6cb840485d8d9bac65c4b74b4ad292ea65801e26",
+    "work.png": "283e38381ddc0fbf3e259fe7565c9e4ceec3d6d7944a6da1a6d6c22de7955d7e"
+  }
+}

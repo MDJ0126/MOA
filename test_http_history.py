@@ -34,6 +34,13 @@ class HistoryHTTPTests(unittest.TestCase):
                         if process.poll() is not None:self.fail('isolated app exited')
                         time.sleep(.05)
                 else:self.fail('isolated app readiness timeout')
+                for name in ('home','team','work','task','slack','environment','actions','diagnostics','backup','operations'):
+                    with urllib.request.urlopen(base+'/guide-images/'+name+'.png',timeout=5) as response:
+                        self.assertEqual(response.headers.get_content_type(),'image/png')
+                        self.assertEqual(response.read(8),b'\x89PNG\r\n\x1a\n')
+                for path in ('/guide-images/manifest.json','/guide-images/../config.json','/guide-images/%2e%2e/config.json'):
+                    with self.assertRaises(urllib.error.HTTPError) as caught:urllib.request.urlopen(base+path,timeout=5)
+                    self.assertEqual(caught.exception.code,404);caught.exception.close()
                 payload={'title':'HTTP atomic','mode':'demo','request_key':'http-task-123'}
                 with self.assertRaises(urllib.error.HTTPError) as caught:post('/api/tasks',payload)
                 error=caught.exception
