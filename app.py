@@ -318,7 +318,8 @@ Use tools to inspect evidence before approving. Changes stay in the task workspa
 
 
 class Worker:
-    def __init__(self, store, model='', url='http://127.0.0.1:11434'):
+    def __init__(self, store, model='', url='http://127.0.0.1:11434',demo_only=False):
+        self.demo_only=demo_only
         self.store, self.model, self.url = store, model, url
         self.vm=VM(store)
         self.stop = threading.Event()
@@ -393,7 +394,12 @@ class Worker:
             if not row:
                 return False
             task = dict(row)
-            c.execute("UPDATE tasks SET status='running' WHERE id=?", (task['id'],))
+            if self.demo_only:
+                try:blocked=task['mode']!='demo' or (json.loads(task['execution_plan']) if task['execution_plan'] else {}).get('environment',{}).get('kind','local')!='local'
+                except (ValueError,TypeError,AttributeError):blocked=True
+                if blocked:
+                    c.execute("UPDATE tasks SET status='interrupted',error='데모 전용 실행에서 실제 AI·VM 작업을 보류했습니다.' WHERE id=? AND status='queued'",(task['id'],));return True
+            if c.execute("UPDATE tasks SET status='running' WHERE id=? AND status='queued'", (task['id'],)).rowcount!=1:return True
         tid = task['id']
         plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
         pipeline=plan['pipeline'];assignment=plan['assignment']
@@ -503,10 +509,21 @@ class Worker:
                 self.store.log('-','system','worker_error',repr(e));self.stop.wait(2)
 
 
-def serve(root, port, model, url):
+def serve(root, port, model, url,demo_only=False):
     server_started=time.time();instance=uuid.uuid4().hex
+    if demo_only and Path(root).resolve()==(ROOT/'data').resolve():raise ValueError('데모 전용 실행에는 운영 data와 다른 새 폴더를 사용하세요.')
     store = Store(root)
-    worker = Worker(store, model, url)
+    default_mode='demo' if demo_only else CONFIG.get('default_mode','demo')
+    if demo_only:
+        if read_setting(store,'slack',{}).get('enabled') or vm_settings(store).get('enabled') or (store.root/'vm'/'session.json').exists():raise ValueError('연결 설정·VM 실행 기록이 있는 데이터는 데모 전용으로 열 수 없습니다.')
+        with store.connect() as c:
+            for row in c.execute('SELECT mode,execution_plan FROM tasks'):
+                if row['mode']!='demo' or (json.loads(row['execution_plan']) if row['execution_plan'] else {}).get('environment',{}).get('kind','local')!='local':raise ValueError('실제 AI·VM 작업이 있는 데이터는 데모 전용으로 열 수 없습니다.')
+        model='';url='http://127.0.0.1:0'
+    worker = Worker(store, model, url,demo_only=demo_only)
+    def vm_observation():
+        if not demo_only:return worker.vm.status()
+        return {'state':'stopped','owner':None,'error':'','installed':False,'iso_exists':False,'config':{**vm_settings(store),'enabled':False},'shared':True,'scope':'데모 전용 · 실제 VM에 접속하지 않습니다.'}
     # OS file lock prevents a second server/worker using the same state directory.
     lock = open(store.root / 'worker.lock', 'a+b')
     lock.seek(0); lock.write(b'0'); lock.flush(); lock.seek(0)
@@ -518,7 +535,7 @@ def serve(root, port, model, url):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     worker.recover()
     slack=SlackService(store)
-    slack_thread=threading.Thread(target=slack.loop,daemon=True)
+    slack_thread=threading.Thread(target=(lambda:None) if demo_only else slack.loop,daemon=True)
     slack_thread.start()
     maintenance_lock=threading.Lock()
     maintenance={'backup':None}
@@ -551,12 +568,13 @@ def serve(root, port, model, url):
             elif self.path == '/api/state':
                 state = store.snapshot(limit=600)
                 state['model'] = model or '미설정'
-                state['model_description']=CONFIG.get('model_description',model)
-                state['default_mode']=CONFIG.get('default_mode','demo')
+                state['model_description']='데모 전용 · 실제 AI 추론 없음' if demo_only else CONFIG.get('model_description',model)
+                state['default_mode']=default_mode
+                state['demo_only']=demo_only
                 state['integrations']={'engine':'미연결','slack':'미연결 · 내부 outbox 저장 중'}
                 state['model_url']=url
                 state['team']=team_settings(store)
-                state['vm']=worker.vm.status()
+                state['vm']=vm_observation()
                 state['slack_status']=slack.status
                 status_file=store.root/'supervisor.json'
                 try:state['supervisor']=json.loads(status_file.read_text(encoding='utf-8')) if status_file.exists() else None
@@ -589,8 +607,9 @@ def serve(root, port, model, url):
                 files=[f'vm/{p.name}' for p in sorted((store.root/'tasks'/tid/'vm').glob('*.png')) if __import__('re').fullmatch(r'r\d+-(planner|developer|reviewer|reporter)-(before|after)\.png',p.name)]
                 self.send(200,{'files':files})
             elif self.path=='/api/vm':
-                self.send(200,worker.vm.status())
+                self.send(200,vm_observation())
             elif self.path=='/api/vm/screen':
+                if demo_only:self.send(400,{'error':'데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.'});return
                 try:
                     with worker.vm.exclusive():path=worker.vm.capture(worker.vm.folder/'screen.png')
                     self.send(200,path.read_bytes(),'image/png')
@@ -686,8 +705,10 @@ def serve(root, port, model, url):
                     raise ValueError('요청 크기 제한')
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data,dict):raise ValueError('JSON 객체가 필요합니다.')
+                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
                 if self.path == '/api/tasks':
-                    self.send(201,{'id':store.add(data['title'],data.get('mode',CONFIG.get('default_mode','demo')),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'))})
+                    if demo_only and (data.get('mode',default_mode)!='demo' or data.get('environment','local')!='local'):raise ValueError('데모 전용 실행은 로컬 데모 작업만 접수합니다.')
+                    self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'))})
                 elif self.path=='/api/backups/create':
                     key=data.get('request_key') or uuid.uuid4().hex
                     with maintenance_lock:
@@ -757,9 +778,10 @@ def serve(root, port, model, url):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default=str(ROOT/'data'))
-    parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--data')
+    parser.add_argument('--demo',action='store_true',help='별도 데이터로 모델·VM·Slack 없이 데모 전용 실행')
+    parser.add_argument('--port', type=int)
     parser.add_argument('--model', default=os.environ.get('AGENT_MODEL',CONFIG.get('model','')))
     parser.add_argument('--ollama-url', '--model-url', default=CONFIG.get('model_url','http://127.0.0.1:11434'))
     args = parser.parse_args()
-    serve(args.data,args.port,args.model,args.ollama_url)
+    serve(args.data or str(ROOT/('data-demo' if args.demo else 'data')),args.port if args.port is not None else (8767 if args.demo else 8765),args.model,args.ollama_url,demo_only=args.demo)

@@ -1,6 +1,6 @@
 // In-memory DOM and isolated HTTP only; no browser or computer use.
 const fs=require('node:fs'),assert=require('node:assert/strict');
-const {JSDOM}=require('./runtime/ui-tests/node_modules/jsdom');
+const {JSDOM}=require(process.env.MOA_JSDOM||'./runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2],sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function post(path,body){const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify(body)});assert.ok(response.ok,await response.clone().text());return response.json()}
 async function main(){
@@ -14,7 +14,7 @@ async function main(){
  const input=(selector,value,event='input')=>{const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))};
  const click=selector=>{assert.ok(d.querySelector(selector),selector);d.querySelector(selector).click()};
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error('Draft timeout: '+label+' / '+d.querySelector('#toast').textContent)}
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;boot();`));
+ w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;window.draftDemo=()=>{state.demo_only=true;renderHome()};boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length===2,'boot');
   await w.draftOpen(a);input('#messageText','A 작성 중');input('#messageRecipient','checker','change');click('[data-action="close-modal"]');
@@ -44,7 +44,8 @@ async function main(){
   let releaseSave,slackReady=false;const slackGate=new Promise(resolve=>releaseSave=resolve);
   w.fetch=async(path,options)=>{if(path==='/api/slack/test')return new Response(JSON.stringify({checks:[{workspace:'Local fixture',channel:'local'}]}),{headers:{'Content-Type':'application/json'}});if(path==='/api/setup/slack'){slackWrites++;const body=JSON.parse(options.body);slackReady=true;await slackGate;return new Response(JSON.stringify({...body,updated:99,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}return original(path,options)};
   click('[data-action="connect-slack"]');await until(()=>slackReady,'Slack save held');input('#slackUsers','U22222222');input('[data-connection-field="bot_token"]','xoxb-next-draft');releaseSave();await until(()=>!d.querySelector('[data-action="connect-slack"]').disabled,'Slack saved');assert.equal(slackWrites,1);assert.equal(d.querySelector('#slackUsers').value,'U22222222');assert.equal(d.querySelector('[data-connection-field="bot_token"]').value,'xoxb-next-draft');assert.equal(d.querySelector('[data-connection-field="app_token"]').value,'');assert.ok(d.querySelector('#slackSaveState').textContent.includes('저장하지'));assert.equal((await(await fetch(base+'/api/setup')).json()).slack.enabled,false);w.fetch=original;
-  console.log('PASS: per-task message drafts, recipient isolation, cross-task delayed ack/replay, pending task/team/VM edits, Slack draft preservation, unload guard');
+  w.draftDemo();assert.equal(d.querySelector('#taskMode').value,'demo');assert.equal(d.querySelector('#taskMode').disabled,true);assert.equal(d.querySelector('#taskEnvironment').disabled,true);assert.equal(d.querySelector('[data-action="connect-slack"]').disabled,true);assert.equal(d.querySelector('[data-action="start-vm"]').disabled,true);assert.ok(d.querySelector('#modelNote').textContent.includes('데모 전용'));
+  console.log('PASS: per-task message drafts, recipient isolation, cross-task delayed ack/replay, pending task/team/VM edits, Slack draft preservation, unload guard, demo profile');
  }finally{closing=true;for(const id of timers)clear(id);timers.clear();await until(()=>w.draftPending===0,'pending actions drained');dom.window.close()}
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

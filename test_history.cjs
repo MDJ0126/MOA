@@ -1,5 +1,5 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
-const {JSDOM}=require('./runtime/ui-tests/node_modules/jsdom');
+const {JSDOM}=require(process.env.MOA_JSDOM||'./runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2],dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#work',runScripts:'outside-only',pretendToBeVisual:true});
 const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};w.fetch=(path,options)=>fetch(base+path,options);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));

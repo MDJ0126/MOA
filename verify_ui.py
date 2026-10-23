@@ -6,12 +6,15 @@ from pathlib import Path
 from socket import socket
 import urllib.request
 from test_runtime import node_executable
+from soak import freeze
 
 root=Path(__file__).resolve().parent
 node=node_executable()
 with socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 with tempfile.TemporaryDirectory(dir=root) as data:
-    process=subprocess.Popen([sys.executable,str(root/'app.py'),'--port',str(port),'--data',data],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    project=Path(data)/'source';freeze(project)
+    iso=project/'runtime/vm-downloads/moa-desktop.iso';iso.parent.mkdir(parents=True);iso.write_bytes(b'DOM fixture only; not a bootable ISO')
+    process=subprocess.Popen([sys.executable,str(project/'app.py'),'--port',str(port),'--data',str(Path(data)/'data')],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     try:
         for _ in range(100):
             try:urllib.request.urlopen(f'http://127.0.0.1:{port}/api/setup',timeout=2).close();break

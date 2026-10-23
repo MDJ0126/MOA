@@ -88,6 +88,8 @@ class VMTests(unittest.TestCase):
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent);self.store=Store(self.temp.name);self.vm=VM(self.store)
+        self.project_patch=patch('vm_runtime.ROOT',Path(self.temp.name));self.project_patch.start();self.addCleanup(self.project_patch.stop)
+        iso=Path(self.temp.name)/DEFAULT['iso'];iso.parent.mkdir(parents=True,exist_ok=True);iso.write_bytes(b'unit fixture only; not a bootable ISO')
         save_team(self.store,PRESETS[1]);write_setting(self.store,'vm',dict(DEFAULT,enabled=True))
     def tearDown(self):self.temp.cleanup()
     def test_actions_validate_types_and_limits(self):

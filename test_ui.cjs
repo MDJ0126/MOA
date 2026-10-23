@@ -1,6 +1,6 @@
 // Real DOM + local HTTP tests. No browser or computer-use session is opened.
 const fs=require('node:fs'),assert=require('node:assert/strict');
-const {JSDOM}=require('./runtime/ui-tests/node_modules/jsdom');
+const {JSDOM}=require(process.env.MOA_JSDOM||'./runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2];
 const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
 const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
