@@ -7,10 +7,13 @@ from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
 import tempfile
+import time
 import zipfile
-from supervisor import acquire
+from supervisor import acquire, write_status
 
 SKIP = {'worker.lock', 'supervisor.lock', 'supervisor.stop', 'supervisor.json', 'model.key'}
+
+class BusyBackup(ValueError):pass
 
 
 def _inside(path, parent):
@@ -29,7 +32,7 @@ def backup(source, output):
             for name in ('supervisor.lock', 'worker.lock'):
                 stack.enter_context(acquire(source / name))
         except OSError as exc:
-            raise ValueError('앱과 감시 관리자를 정상 종료한 뒤 백업하세요.') from exc
+            raise BusyBackup('앱과 감시 관리자를 정상 종료한 뒤 백업하세요.') from exc
         with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
             archive = Path(temporary) / 'backup.zip'
             files = {}
@@ -75,7 +78,7 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             if z.getinfo('manifest.json').file_size > 16 * 1024**2:
                 raise ValueError('백업 목록이 너무 큽니다.')
             manifest = json.loads(z.read('manifest.json'))
-            if manifest.get('version') != 1 or not isinstance(manifest.get('files'), dict):
+            if not isinstance(manifest, dict) or manifest.get('version') != 1 or not isinstance(manifest.get('files'), dict):
                 raise ValueError('지원하지 않는 백업입니다.')
             files = manifest['files']
             if len({name.casefold() for name in files}) != len(files):
@@ -83,6 +86,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             if set(names) != {'manifest.json'} | {'data/' + name for name in files}:
                 raise ValueError('백업 목록과 실제 파일이 다릅니다.')
             for name, expected in files.items():
+                if not isinstance(expected, dict) or type(expected.get('size')) is not int or expected['size'] < 0 or not isinstance(expected.get('sha256'), str):
+                    raise ValueError('잘못된 백업 파일 정보입니다.')
                 parts = PurePosixPath(name).parts
                 reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in range(1, 10)}
                 if not parts or PurePosixPath(name).as_posix() != name or any(p in ('.', '..') or p.endswith((' ', '.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name in SKIP or parts[0] == 'vm':
@@ -114,14 +119,54 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
     return len(files)
 
 
+def inspect_backup(archive):
+    """Fully validate in a temporary folder without replacing installed data."""
+    archive = Path(archive)
+    with tempfile.TemporaryDirectory(dir=archive.parent) as temporary:
+        destination = Path(temporary) / 'preview'
+        count = restore(archive, destination, max_bytes=512 * 1024**2)
+        with closing(sqlite3.connect(destination / 'state.sqlite3')) as c:
+            tasks = c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+            messages = c.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
+            encrypted = bool(c.execute("SELECT 1 FROM settings WHERE key='slack_secret_blob'").fetchone())
+        return {'version': 1, 'files': count, 'tasks': tasks, 'messages': messages, 'encrypted_tokens': encrypted, 'restored': False}
+
+
+def scheduled_backup(source, destination, parent_pid, timeout=300):
+    from vm_runtime import pid_alive
+    status = Path(destination).with_suffix('.status.json')
+    deadline = time.monotonic() + timeout
+    def record(state, message):
+        if not write_status(status, {'state': state, 'message': message}):
+            raise OSError('백업 상태 파일을 저장하지 못했습니다.')
+    record('waiting', '앱과 감시 관리자 종료를 기다리고 있습니다.')
+    try:
+        while time.monotonic() < deadline:
+            if not pid_alive(parent_pid):
+                try:
+                    count = backup(source, destination)
+                    record('completed', f'{count}개 파일 백업 완료')
+                    return count
+                except BusyBackup:pass
+            time.sleep(.25)
+        raise ValueError('앱 종료 대기 시간이 초과되었습니다. 기존 데이터는 보존했습니다.')
+    except Exception:
+        record('failed', '백업하지 못했습니다. 앱 종료·폴더 권한·디스크 공간을 확인하세요.')
+        raise
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='앱을 종료한 상태에서 data 백업/새 폴더 복원')
-    parser.add_argument('action', choices=['backup', 'restore'])
+    parser.add_argument('action', choices=['backup', 'restore', 'scheduled'])
     parser.add_argument('source')
     parser.add_argument('destination')
+    parser.add_argument('--wait-pid', type=int)
     args = parser.parse_args()
     try:
-        count = (backup if args.action == 'backup' else restore)(args.source, args.destination)
+        if args.action == 'scheduled':
+            if not args.wait_pid or args.wait_pid < 1:raise ValueError('종료 대기할 앱 PID가 필요합니다.')
+            count = scheduled_backup(args.source, args.destination, args.wait_pid)
+        else:count = (backup if args.action == 'backup' else restore)(args.source, args.destination)
         print(f'{args.action}: {count}개 파일 처리 완료')
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, zipfile.BadZipFile) as exc:
         parser.exit(1, f'처리하지 못했습니다: {exc}\n')

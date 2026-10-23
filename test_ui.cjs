@@ -78,6 +78,20 @@ async function main(){
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#toast').textContent.includes('VM 환경을 저장'),'VM configuration save');
  const vmConfig=await(await fetch(base+'/api/vm')).json();assert.equal(vmConfig.config.memory_mb,1024);assert.equal(vmConfig.state,'stopped');
  assert.equal(d.querySelector('#taskEnvironment').options.length,2);
+ click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
+ click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');
+ const installationFetch=w.fetch;
+ w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({files:3,tasks:2,messages:7,restored:false}),{headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
+ d.querySelector('#backupFile').innerHTML='<option value="test.zip">test.zip</option>';
+ click('[data-action="inspect-backup"]');await until(()=>d.querySelector('#backupResult').textContent.includes('작업 2개'),'backup preview');
+ assert.ok(d.querySelector('#backupResult').textContent.includes('현재 데이터는 변경하지'));
+ w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({error:'손상된 백업입니다.'}),{status:400,headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
+ click('[data-action="inspect-backup"]');await until(()=>d.querySelector('#backupResult').textContent.includes('손상된 백업'),'backup error preservation');
+ w.fetch=async(path,options)=>path==='/api/backups/create'?new Response(JSON.stringify({file:'test.zip',message:'앱 종료 후 백업합니다.'}),{status:202,headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
+ click('[data-action="create-backup"]');await until(()=>d.querySelector('#backupCreateState').dataset.accepted==='true','scheduled backup acknowledgement');
+ assert.equal(d.querySelector('[data-action="create-backup"]').hidden,true);
+ delete d.querySelector('#backupCreateState').dataset.accepted;
+ w.fetch=installationFetch;
  docFailure=true;w.location.hash='docs/slack';await until(()=>d.querySelector('[data-action="retry-doc"]'),'guide error and retry');
  docFailure=false;click('[data-action="retry-doc"]');
  await until(()=>d.querySelector('#docContent h1')?.textContent==='Slack 연결하기','built-in guide');
@@ -89,6 +103,6 @@ async function main(){
  await assert.rejects(w.testAPI('/timeout-test'),/응답 시간이 초과/);
  w.fetch=async()=>new Response('not json');await assert.rejects(w.testAPI('/bad-response'),/서버 응답/);
  w.fetch=originalFetch;w.setTimeout=originalTimer;
- console.log('PASS: shared VM settings/tab/dirty/save, startup recovery, request timeout, bad JSON response, dirty state/reset, keyboard tabs, server task search, guide failure/retry, preset/team, compact execution, safe text, modal, Slack distinction/secret clearing, docs/search');
+ console.log('PASS: installation diagnostics, backup list/preview/error/schedule, shared VM settings/tab/dirty/save, startup recovery, request timeout, bad JSON response, dirty state/reset, keyboard tabs, server task search, guide failure/retry, preset/team, compact execution, safe text, modal, Slack distinction/secret clearing, docs/search');
 }
 main().then(()=>{dom.window.close()}).catch(error=>{console.error(error);dom.window.close();process.exitCode=1});

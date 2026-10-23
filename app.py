@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import sqlite3
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -15,6 +17,8 @@ from urllib.parse import urlparse, parse_qs
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checks import run_checks
+from diagnostics import inspect_installation
+from data_backup import inspect_backup
 from local_model import Llama
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
@@ -466,6 +470,8 @@ def serve(root, port, model, url):
     slack=SlackService(store)
     slack_thread=threading.Thread(target=slack.loop,daemon=True)
     slack_thread.start()
+    maintenance_lock=threading.Lock()
+    maintenance={'backup':False}
     class Handler(BaseHTTPRequestHandler):
         def send(self, status, data, kind='application/json; charset=utf-8'):
             body = json.dumps(data, ensure_ascii=False).encode() if not isinstance(data, bytes) else data
@@ -491,6 +497,19 @@ def serve(root, port, model, url):
                 try:state['supervisor']=json.loads(status_file.read_text(encoding='utf-8')) if status_file.exists() else None
                 except (OSError,ValueError):state['supervisor']=None
                 self.send(200,state)
+            elif self.path=='/api/diagnostics':
+                self.send(200,inspect_installation(ROOT,CONFIG,SDK_AVAILABLE))
+            elif self.path=='/api/backups':
+                folder=ROOT/'backups'
+                jobs=[]
+                if folder.resolve()==ROOT/'backups':
+                    for path in sorted(folder.glob('*.status.json'),reverse=True)[:20]:
+                        try:
+                            if path.is_symlink() or path.resolve().parent!=folder.resolve() or path.stat().st_size>4096:continue
+                            value=json.loads(path.read_text(encoding='utf-8'))
+                            if value.get('state') in ('waiting','completed','failed'):jobs.append({'file':path.name,'state':value['state'],'message':str(value.get('message',''))[:300]})
+                        except (OSError,ValueError,AttributeError):continue
+                self.send(200,{'files':[p.name for p in sorted(folder.glob('*.zip')) if folder.resolve()==ROOT/'backups' and p.is_file() and not p.is_symlink() and p.resolve().parent==folder.resolve()],'jobs':jobs})
             elif self.path=='/api/setup':
                 self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE})
             elif self.path.startswith('/api/vm/evidence?'):
@@ -583,6 +602,29 @@ def serve(root, port, model, url):
                 if not isinstance(data,dict):raise ValueError('JSON 객체가 필요합니다.')
                 if self.path == '/api/tasks':
                     self.send(201,{'id':store.add(data['title'],data.get('mode',CONFIG.get('default_mode','demo')),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'))})
+                elif self.path=='/api/backups/create':
+                    with maintenance_lock:
+                        if maintenance['backup']:raise ValueError('이미 종료 후 백업을 준비하고 있습니다.')
+                        maintenance['backup']=True
+                    folder=ROOT/'backups'
+                    try:
+                        if folder.resolve()!=ROOT/'backups':raise ValueError('프로젝트 내부 backups 폴더를 사용하세요.')
+                        folder.mkdir(exist_ok=True)
+                        name='workspace-'+time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]+'.zip'
+                        subprocess.Popen([sys.executable,str(ROOT/'data_backup.py'),'scheduled',str(store.root),str(folder/name),'--wait-pid',str(os.getpid())],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                    except BaseException:
+                        maintenance['backup']=False
+                        raise
+                    store.control('pause');worker.stop.set()
+                    try:self.send(202,{'file':name,'state':'waiting','message':'앱 종료 후 backups 폴더에 저장합니다. 백업 후 Start.ps1로 다시 실행하세요.'})
+                    finally:threading.Thread(target=server.shutdown,daemon=True).start()
+                elif self.path=='/api/backups/inspect':
+                    name=data.get('name','')
+                    if not isinstance(name,str) or Path(name).name!=name or '/' in name or '\\' in name or not name.lower().endswith('.zip'):raise ValueError('백업 목록에서 ZIP 파일을 선택하세요.')
+                    folder=ROOT/'backups';archive=folder/name
+                    if folder.resolve()!=ROOT/'backups' or not archive.is_file() or archive.is_symlink() or archive.resolve().parent!=folder.resolve():raise ValueError('백업 파일을 찾을 수 없습니다.')
+                    try:self.send(200,inspect_backup(archive))
+                    except (zipfile.BadZipFile,sqlite3.Error,RuntimeError,NotImplementedError):raise ValueError('백업 ZIP 또는 데이터베이스가 손상되었거나 지원하지 않는 형식입니다.') from None
                 elif self.path=='/api/setup/vm':
                     self.send(200,worker.vm.save(data))
                 elif self.path=='/api/vm/control':

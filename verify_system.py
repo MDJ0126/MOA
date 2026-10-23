@@ -8,6 +8,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from socket import socket
+import uuid
+from app import Store
+from data_backup import backup
 
 root = Path(__file__).resolve().parent
 with socket() as sock:
@@ -39,6 +42,18 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             raise RuntimeError('서버 시작 실패')
         assert '로컬 에이전트 팀'.encode() in request('/')
         setup=request('/api/setup');assert len(setup['presets'])==3
+        diagnosis=request('/api/diagnostics');assert diagnosis['version']==1 and len(diagnosis['checks'])==5
+        fixture=Store(Path(folder)/'backup-fixture')
+        archive=root/'backups'/('test-'+uuid.uuid4().hex+'.zip')
+        try:
+            backup(fixture.root,archive)
+            assert archive.name in request('/api/backups')['files']
+            preview=request('/api/backups/inspect',{'name':archive.name})
+            assert preview['tasks']==0 and preview['restored'] is False
+            for bad in ('../data/state.sqlite3','../outside.zip','missing.zip'):
+                try:request('/api/backups/inspect',{'name':bad});raise AssertionError('backup path accepted')
+                except urllib.error.HTTPError as e:assert e.code==400
+        finally:archive.unlink(missing_ok=True)
         assert len(request('/api/docs'))>=8
         assert 'Slack 연결하기'.encode() in request('/api/docs/slack')
         try:
@@ -74,9 +89,19 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
             except (urllib.error.URLError,ConnectionError):time.sleep(.05)
         assert all(t['status']=='completed' for t in state['tasks'])
         assert len([m for m in state['messages'] if m['kind']=='start'])==8
-        request('/api/control',{'action':'shutdown'})
+        scheduled=request('/api/backups/create',{})
         process.wait(timeout=5)
         assert process.returncode==0
+        saved=root/'backups'/scheduled['file'];status_file=saved.with_suffix('.status.json')
+        try:
+            for _ in range(100):
+                if status_file.exists() and json.loads(status_file.read_text(encoding='utf-8')).get('state')=='completed':break
+                time.sleep(.1)
+            else:raise AssertionError('scheduled backup did not complete')
+            from data_backup import inspect_backup
+            assert inspect_backup(saved)['tasks']==2
+        finally:
+            saved.unlink(missing_ok=True);status_file.unlink(missing_ok=True)
         print('PASS: HTTP dashboard, request guard, sequential 2-task execution, real artifacts, single-worker lock, restart persistence, graceful shutdown')
     finally:
         if process.poll() is None:

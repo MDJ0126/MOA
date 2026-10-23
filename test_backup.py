@@ -6,9 +6,10 @@ import tempfile
 import unittest
 import zipfile
 from app import Store
-from data_backup import backup, restore
+from data_backup import backup, restore, inspect_backup
 from setup_config import read_setting, write_setting
 from supervisor import acquire
+from unittest.mock import patch
 
 
 class BackupTests(unittest.TestCase):
@@ -35,6 +36,28 @@ class BackupTests(unittest.TestCase):
         for key in ('slack', 'vm'):self.assertFalse(read_setting(restored, key, {})['enabled'])
         self.assertEqual((destination / 'tasks' / 'result.txt').read_text(), 'result')
         self.assertFalse((destination / 'model.key').exists())
+
+    def test_preview_validates_without_replacing_source(self):
+        backup(self.source, self.archive)
+        original=self.archive.read_bytes()
+        result=inspect_backup(self.archive)
+        self.assertEqual(result['tasks'],0)
+        self.assertFalse(result['restored'])
+        self.assertEqual(self.archive.read_bytes(),original)
+        self.assertTrue(read_setting(self.store,'slack',{})['enabled'])
+
+    def test_scheduled_backup_waits_then_completes(self):
+        from data_backup import scheduled_backup
+        with patch('vm_runtime.pid_alive',side_effect=[True,False]), patch('data_backup.time.sleep'):
+            scheduled_backup(self.source,self.archive,123)
+        status=json.loads(self.archive.with_suffix('.status.json').read_text(encoding='utf-8'))
+        self.assertEqual(status['state'],'completed')
+
+    def test_scheduled_timeout_preserves_source(self):
+        from data_backup import scheduled_backup
+        with self.assertRaisesRegex(ValueError,'초과'):scheduled_backup(self.source,self.archive,123,timeout=0)
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(json.loads(self.archive.with_suffix('.status.json').read_text(encoding='utf-8'))['state'],'failed')
 
     def test_running_worker_blocks_backup(self):
         with acquire(self.source / 'worker.lock'):
