@@ -29,10 +29,15 @@ class SettingsConflict(ValueError):pass
 
 TEAM_ERRORS=(ValueError,TypeError,KeyError,OverflowError,RecursionError)
 
-def team_recovery_token(raw):
+def setting_fingerprint(raw):
     digest=hashlib.sha256();digest.update(type(raw).__name__.encode());digest.update(b'\0')
     digest.update(raw if isinstance(raw,bytes) else str(raw).encode('utf-8','surrogatepass'))
     return digest.hexdigest()
+
+def archive_setting(connection,key,raw):
+    token=setting_fingerprint(raw)
+    connection.execute('CREATE TABLE IF NOT EXISTS settings_recovery_archive(id INTEGER PRIMARY KEY,key TEXT NOT NULL,value,token TEXT NOT NULL,created REAL NOT NULL)')
+    connection.execute('INSERT INTO settings_recovery_archive(key,value,token,created) VALUES(?,?,?,?)',(key,raw,token,time.time()))
 
 def decode_team(raw):
     value=json.loads(raw);clean=validate_team(value)
@@ -53,10 +58,9 @@ def checked_write_setting(store,key,clean,value):
         if key=='workspace':
             try:current=decode_team(row[0]) if row else {}
             except TEAM_ERRORS:
-                token=team_recovery_token(row[0])
+                token=setting_fingerprint(row[0])
                 if value.get('recovery_token')!=token:raise SettingsConflict('손상된 팀 설정이 변경되었습니다. 최신 설정을 확인한 뒤 다시 저장하세요.') from None
-                c.execute('CREATE TABLE IF NOT EXISTS settings_recovery_archive(id INTEGER PRIMARY KEY,key TEXT NOT NULL,value,token TEXT NOT NULL,created REAL NOT NULL)')
-                c.execute('INSERT INTO settings_recovery_archive(key,value,token,created) VALUES(?,?,?,?)',(key,row[0],token,time.time()))
+                archive_setting(c,key,row[0])
                 current={}
             else:
                 if value.get('recovery_token') is not None:raise SettingsConflict('팀 설정이 이미 변경되었습니다. 최신 설정을 확인한 뒤 다시 저장하세요.')
@@ -83,7 +87,7 @@ def team_settings(store):
     with store.connect() as c:row=c.execute("SELECT value FROM settings WHERE key='workspace'").fetchone()
     if not row:return default
     try:return decode_team(row[0])
-    except TEAM_ERRORS:return {**default,'recovery_required':True,'recovery_token':team_recovery_token(row[0]),'recovery_message':'저장된 팀 설정을 읽지 못했습니다. 구성을 확인하고 저장하면 원문을 보관하고 복구합니다.'}
+    except TEAM_ERRORS:return {**default,'recovery_required':True,'recovery_token':setting_fingerprint(row[0]),'recovery_message':'저장된 팀 설정을 읽지 못했습니다. 구성을 확인하고 저장하면 원문을 보관하고 복구합니다.'}
 
 def validate_team(value):
     if not isinstance(value,dict):raise ValueError('팀 설정 객체가 필요합니다.')

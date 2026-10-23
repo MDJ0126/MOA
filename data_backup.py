@@ -11,6 +11,7 @@ import tempfile
 import time
 import zipfile
 from supervisor import acquire, write_status
+from setup_config import archive_setting
 
 SKIP = {'worker.lock', 'supervisor.lock', 'supervisor.stop', 'supervisor.json', 'model.key','state.sqlite3-wal','state.sqlite3-shm'}
 CHUNK_SIZE=64*1024
@@ -161,6 +162,10 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 c.execute('INSERT INTO vbox_restore_archive(restored,snapshot) VALUES(?,?)',(time.time(),json.dumps(vbox_records,ensure_ascii=False)))
                 c.execute("DELETE FROM settings WHERE key IN ('vbox_plan','vbox_preparation','vbox_installation')")
             tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            owner=c.execute("SELECT value FROM settings WHERE key='vm_owner'").fetchone()
+            if owner:
+                archive_setting(c,'vm_owner',owner[0])
+                c.execute("DELETE FROM settings WHERE key='vm_owner'")
             if 'backup_requests' in tables and c.execute('SELECT 1 FROM backup_requests LIMIT 1').fetchone():
                 # PIDs and request identity belong to the installation that made
                 # the backup. Keep exact SQLite values, including legacy blobs.
