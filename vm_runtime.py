@@ -156,16 +156,34 @@ class VM:
             try:
                 with self.exclusive():lease=None
             except BusyVM:pass
+            except (OSError,ValueError) as exc:state='unreachable';error=str(exc)
         return {'state':state,'owner':lease,'error':error,'installed':(ROOT/'runtime/qemu/qemu-system-x86_64.exe').is_file(),
                 'iso_exists':(ROOT/config['iso']).is_file(),'config':config,'shared':True,
                 'scope':'VM 화면 입력·캡처만 격리합니다. 모델 추론과 파일 생성·Python 검증은 호스트에서 실행합니다.'}
+
+    def desktop_handle(self):
+        path=self.folder/'desktop.lock'
+        if self.folder.resolve()!=self.folder:raise ValueError('VM 사용권 폴더 경로를 확인하세요.')
+        def valid(info):return stat.S_ISREG(info.st_mode) and info.st_nlink==1 and not getattr(info,'st_file_attributes',0)&0x400
+        try:original=path.lstat()
+        except FileNotFoundError:original=None
+        if original is not None and not valid(original):raise ValueError('VM 사용권 잠금은 링크가 아닌 일반 파일이어야 합니다.')
+        fd=os.open(path,os.O_RDWR|os.O_CREAT|getattr(os,'O_BINARY',0)|getattr(os,'O_NOFOLLOW',0),0o600)
+        try:
+            opened=os.fstat(fd);current=path.lstat()
+            identity=lambda info:(info.st_dev,info.st_ino)
+            if not valid(opened) or not valid(current) or identity(opened)!=identity(current) or original is not None and identity(original)!=identity(opened) or path.resolve().parent!=self.folder:
+                raise ValueError('VM 사용권 잠금 파일이 열기 중 변경되었습니다.')
+            return os.fdopen(fd,'r+b',buffering=0)
+        except BaseException:
+            os.close(fd);raise
 
     @contextmanager
     def exclusive(self):
         if not self.thread_lock.acquire(blocking=False):raise BusyVM('다른 에이전트가 공유 VM을 사용 중입니다.')
         handle=None;locked=False
         try:
-            handle=(self.folder/'desktop.lock').open('a+b');handle.seek(0);handle.write(b'0');handle.flush();handle.seek(0)
+            handle=self.desktop_handle();handle.seek(0)
             try:
                 if os.name=='nt':
                     import msvcrt
@@ -175,6 +193,8 @@ class VM:
                     fcntl.flock(handle.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
                 locked=True
             except OSError:raise BusyVM('다른 실행기가 공유 VM을 사용 중입니다.') from None
+            if os.fstat(handle.fileno()).st_size==0:
+                handle.write(b'0');handle.flush();handle.seek(0)
             yield
         finally:
             try:
