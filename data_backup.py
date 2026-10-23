@@ -3,9 +3,11 @@ import argparse
 from contextlib import ExitStack, closing
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import re
 import sqlite3
 import tempfile
 import time
@@ -51,6 +53,37 @@ def checked_backup_path(name,aliases):
         if folded in aliases and aliases[folded]!=prefix:raise ValueError('대소문자 디렉터리 경로가 충돌합니다.')
         aliases[folded]=prefix
     return parts
+
+def restored_connection(key,raw):
+    """Normalize inactive connection metadata without reading keys or VM files."""
+    from vm_runtime import DEFAULT as VM_DEFAULT
+    default={**VM_DEFAULT,'updated':0} if key=='vm' else {'enabled':False,'connections':[],'allowed_users':[],'channel':'','receive':True,'notify':True,'updated':0}
+    try:
+        source=json.loads(raw,object_pairs_hook=manifest_object)
+        if not isinstance(source,dict):raise ValueError('connection object required')
+        value={name:source.get(name,item) for name,item in default.items()}
+        if any(type(value[name]) is not type(item) for name,item in default.items() if name!='updated'):raise ValueError('connection field type')
+        if type(value['updated']) not in (int,float) or not math.isfinite(value['updated']) or value['updated']<0:raise ValueError('connection revision')
+        if key=='vm':
+            if not 256<=value['memory_mb']<=4096 or not 1<=value['cpus']<=2 or value['accelerator'] not in ('tcg','whpx'):raise ValueError('VM limits')
+            for name in ('iso','disk'):
+                text=value[name];path=PurePosixPath(text.replace('\\','/'))
+                if not text and name=='disk':continue
+                if not text or path.is_absolute() or '..' in path.parts or ':' in text or ',' in text or path.suffix.lower() not in (('.iso',) if name=='iso' else ('.qcow2','.img')):raise ValueError('VM path')
+        else:
+            if value['channel'] and not re.fullmatch('[CG][A-Z0-9]{5,}',value['channel']):raise ValueError('Slack channel')
+            if any(not isinstance(user,str) or not re.fullmatch('[UW][A-Z0-9]{5,}',user) for user in value['allowed_users']):raise ValueError('Slack users')
+            if len(value['connections'])>9:raise ValueError('Slack connection count')
+            connections=[];ids=set();agents=set()
+            for item in value['connections']:
+                if not isinstance(item,dict):raise ValueError('Slack connection object')
+                cid=item.get('id');agent=item.get('agent_id','shared')
+                if not isinstance(cid,str) or not re.fullmatch('[a-z][a-z0-9_-]{0,31}',cid) or cid in ids or not isinstance(agent,str) or not re.fullmatch('[a-z][a-z0-9_-]{0,31}',agent) or agent in agents:raise ValueError('Slack connection identity')
+                ids.add(cid);agents.add(agent);connections.append({'id':cid,'agent_id':agent})
+            value['connections']=connections
+        value['enabled']=False
+        return value
+    except (ValueError,TypeError,OverflowError,RecursionError):return default
 
 
 def backup(source, output):
@@ -178,7 +211,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             for key in ('slack', 'vm'):
                 row = c.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
                 if row:
-                    value = json.loads(row[0]); value['enabled'] = False
+                    archive_setting(c,key,row[0])
+                    value=restored_connection(key,row[0])
                     c.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(value), key))
         # Windows rename refuses an existing destination; never replace user data.
         publish_restored(staged,destination)
