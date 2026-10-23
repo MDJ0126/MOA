@@ -96,6 +96,15 @@ async function main(){
  input('#vmMemory','1024','change');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#toast').textContent.includes('VM 환경을 저장'),'VM configuration save');
  const vmConfig=await(await fetch(base+'/api/vm')).json();assert.equal(vmConfig.config.memory_mb,1024);assert.equal(vmConfig.state,'stopped');
+ const externalVM={...vmConfig.config,memory_mb:1536,expected_updated:vmConfig.config.updated};
+ const changedVM=await fetch(base+'/api/setup/vm',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify(externalVM)});assert.equal(changedVM.status,200);
+ input('#vmMemory','2048','change');click('[data-action="save-vm"]');await until(()=>!d.querySelector('#settingsConflict').hidden,'VM stale version conflict');
+ assert.equal(d.querySelector('#vmMemory').value,'2048');
+ assert.equal((await(await fetch(base+'/api/vm')).json()).config.memory_mb,1536);
+ click('[data-action="reload-settings"]');await until(()=>d.querySelector('#toast').textContent.includes('최신 저장 버전'),'VM latest version without losing draft');
+ assert.equal(d.querySelector('#vmMemory').value,'2048');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
+ click('[data-action="save-vm"]');await until(()=>d.querySelector('#settingsConflict').hidden,'VM reviewed conflict save');
+ assert.equal((await(await fetch(base+'/api/vm')).json()).config.memory_mb,2048);
  assert.equal(d.querySelector('#taskEnvironment').options.length,2);
  click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
  await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');

@@ -9,13 +9,15 @@ import subprocess
 import threading
 import time
 import uuid
-from setup_config import read_setting,write_setting,hardware
+from setup_config import read_setting,write_setting,checked_write_setting,hardware
 
 ROOT=Path(__file__).resolve().parent
 DEFAULT={'enabled':False,'memory_mb':512,'cpus':1,'accelerator':'tcg','iso':'runtime/vm-downloads/moa-desktop.iso','disk':'','network':False}
 KEYS=set('abcdefghijklmnopqrstuvwxyz0123456789')|{'ret','esc','spc','tab','backspace','up','down','left','right','home','end','delete','shift','ctrl','alt','meta_l','minus','equal','dot','comma','slash','backslash','semicolon','apostrophe','grave','bracket_left','bracket_right'}|{f'f{i}' for i in range(1,13)}
 
 def settings(store):return read_setting(store,'vm',DEFAULT)
+def same_configuration(left,right):
+    return all(left.get(key,default)==right.get(key,default) for key,default in DEFAULT.items())
 def validate_actions(value,pipeline):
     if not isinstance(value,list) or len(value)>40:raise ValueError('VM 화면 동작은 최대 40개입니다.')
     result=[]
@@ -126,14 +128,14 @@ class VM:
             except OSError:raise BusyVM('다른 실행기가 공유 VM을 사용 중입니다.') from None
             yield
         finally:
-            if handle:
-                if locked:
-                    handle.seek(0)
-                    if os.name=='nt':
-                        import msvcrt
-                        msvcrt.locking(handle.fileno(),msvcrt.LK_UNLCK,1)
-                handle.close()
-            self.thread_lock.release()
+            try:
+                if handle:
+                    try:
+                        if locked and os.name=='nt':
+                            import msvcrt
+                            handle.seek(0);msvcrt.locking(handle.fileno(),msvcrt.LK_UNLCK,1)
+                    finally:handle.close()
+            finally:self.thread_lock.release()
 
     def save(self,value):
         config={**DEFAULT,**value}
@@ -156,7 +158,7 @@ class VM:
                     if pid_alive(self.session().get('pid')):
                         raise ValueError('기존 VM 프로세스가 실행 중입니다. 제어 연결과 종료 상태를 확인한 뒤 설정을 저장하세요.') from None
                 else:raise ValueError('VM을 종료한 뒤 환경 설정을 저장하세요.')
-            write_setting(self.store,'vm',{k:config[k] for k in DEFAULT})
+            checked_write_setting(self.store,'vm',{k:config[k] for k in DEFAULT},value)
         return settings(self.store)
 
     def _start(self):
@@ -231,22 +233,29 @@ class VM:
         env=(json.loads(task['execution_plan']) if task['execution_plan'] else {}).get('environment',{})
         if env.get('kind')!='vm':yield;return
         with self.exclusive():
-            if env.get('config')!=settings(self.store):raise ValueError('접수 이후 VM 설정이 변경되었습니다. 현재 환경으로 새 작업을 등록하세요.')
+            if not same_configuration(env.get('config') or {},settings(self.store)):raise ValueError('접수 이후 VM 설정이 변경되었습니다. 현재 환경으로 새 작업을 등록하세요.')
+            def active():
+                with self.store.connect() as c:row=c.execute('SELECT status FROM tasks WHERE id=?',(task['id'],)).fetchone()
+                return bool(row and row[0] in ('queued','running'))
+            if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
             self._start();owner={'task_id':task['id'],'agent':actor,'role':role,'since':time.time()}
-            write_setting(self.store,'vm_owner',owner);self.store.log(task['id'],actor,'vm_acquire',json.dumps(owner,ensure_ascii=False))
+            capture_started=False
             try:
+                write_setting(self.store,'vm_owner',owner);self.store.log(task['id'],actor,'vm_acquire',json.dumps(owner,ensure_ascii=False))
                 folder=self.store.root/'tasks'/task['id']/'vm'
                 stamp=f"r{task['revision']}-{role}"
+                if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
+                capture_started=True
                 self.capture(folder/(stamp+'-before.png'))
                 for action in env.get('actions',[]):
                     if action['role']!=role:continue
-                    with self.store.connect() as c:state=c.execute('SELECT status FROM tasks WHERE id=?',(task['id'],)).fetchone()[0]
-                    if state=='cancelled':raise ValueError('취소된 VM 작업입니다.')
+                    if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
                     self.action(action);self.store.log(task['id'],actor,'vm_action',json.dumps(action,ensure_ascii=False))
                 yield
-                self.capture(folder/(stamp+'-after.png'))
+                if active():self.capture(folder/(stamp+'-after.png'))
             except Exception:
-                try:self.capture(folder/(stamp+'-after.png'))
+                try:
+                    if capture_started and active():self.capture(folder/(stamp+'-after.png'))
                 except (OSError,ValueError):pass
                 raise
             finally:

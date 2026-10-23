@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,8 +11,74 @@ from app import Store,Worker,Demo
 from setup_config import PRESETS,save_team,write_setting
 from vm_runtime import VM,BusyVM,DEFAULT,validate_actions
 from supervisor import write_status
+from setup_config import SettingsConflict,read_setting
 
 class VMTests(unittest.TestCase):
+    def test_stale_settings_are_rejected_without_overwrite(self):
+        self.vm.save(dict(DEFAULT,enabled=True,expected_updated=0))
+        from vm_runtime import settings
+        current=settings(self.store)
+        with self.assertRaises(SettingsConflict):self.vm.save(dict(DEFAULT,memory_mb=1024,expected_updated=0))
+        self.assertEqual(settings(self.store),current)
+        saved=self.vm.save(dict(DEFAULT,enabled=True,memory_mb=1024,expected_updated=current['updated']))
+        self.assertEqual(saved['memory_mb'],1024);self.assertGreater(saved['updated'],current['updated'])
+
+    def test_same_values_new_revision_does_not_invalidate_frozen_work(self):
+        self.store.add('same environment','demo',environment='vm');task=self.store.snapshot()['tasks'][0]
+        with patch.object(self.vm,'session',return_value={}):self.vm.save(dict(DEFAULT,enabled=True,expected_updated=0))
+        with patch.object(self.vm,'_start') as start,patch.object(self.vm,'capture'):
+            with self.vm.stage(task,'developer','builder'):pass
+            start.assert_called_once()
+
+    def test_cancelled_before_acquisition_does_not_start_or_capture(self):
+        tid=self.store.add('cancelled','demo',environment='vm');task=self.store.snapshot()['tasks'][0];self.store.control('cancel',tid)
+        with patch.object(self.vm,'_start') as start,patch.object(self.vm,'capture') as capture,patch.object(self.vm,'action') as action:
+            with self.assertRaisesRegex(ValueError,'취소'):
+                with self.vm.stage(task,'developer','builder'):self.fail('cancelled stage entered')
+            start.assert_not_called();capture.assert_not_called();action.assert_not_called()
+
+    def test_cancel_during_stage_skips_final_capture_and_releases_owner(self):
+        tid=self.store.add('cancel during stage','demo',environment='vm');task=self.store.snapshot()['tasks'][0]
+        with patch.object(self.vm,'_start'),patch.object(self.vm,'capture') as capture:
+            with self.vm.stage(task,'developer','builder'):self.store.control('cancel',tid)
+            self.assertEqual(capture.call_count,1)
+        self.assertIsNone(read_setting(self.store,'vm_owner',None))
+
+    def test_cancel_between_actions_stops_remaining_actions(self):
+        actions=[{'role':'developer','action':'key','keys':['a']},{'role':'developer','action':'key','keys':['b']}]
+        tid=self.store.add('cancel between actions','demo',environment='vm',vm_actions=actions);task=self.store.snapshot()['tasks'][0]
+        def cancel_after_first(action):self.store.control('cancel',tid)
+        with patch.object(self.vm,'_start'),patch.object(self.vm,'capture') as capture,patch.object(self.vm,'action',side_effect=cancel_after_first) as action:
+            with self.assertRaisesRegex(ValueError,'취소'):
+                with self.vm.stage(task,'developer','builder'):self.fail('cancelled stage entered')
+            self.assertEqual(action.call_count,1);self.assertEqual(capture.call_count,1)
+        self.assertIsNone(read_setting(self.store,'vm_owner',None))
+
+    @unittest.skipUnless(os.name=='nt','Windows byte-range lock')
+    def test_unlock_error_still_closes_handle_and_releases_thread_lock(self):
+        import msvcrt
+        locking=msvcrt.locking
+        def fail_unlock(fd,mode,size):
+            if mode==msvcrt.LK_UNLCK:raise OSError('unlock failed')
+            return locking(fd,mode,size)
+        with patch('msvcrt.locking',side_effect=fail_unlock):
+            with self.assertRaisesRegex(OSError,'unlock failed'):
+                with self.vm.exclusive():pass
+        self.assertFalse(self.vm.thread_lock.locked())
+        with VM(self.store).exclusive():pass
+        with self.vm.exclusive():pass
+
+    def test_acquire_log_failure_still_releases_owner_and_lock(self):
+        self.store.add('log error','demo',environment='vm');task=self.store.snapshot()['tasks'][0];log=self.store.log
+        def fail_acquire(tid,actor,kind,content,**kwargs):
+            if kind=='vm_acquire':raise OSError('log unavailable')
+            return log(tid,actor,kind,content,**kwargs)
+        with patch.object(self.vm,'_start'),patch.object(self.vm,'capture'),patch.object(self.store,'log',side_effect=fail_acquire):
+            with self.assertRaisesRegex(OSError,'log unavailable'):
+                with self.vm.stage(task,'developer','builder'):pass
+        self.assertIsNone(read_setting(self.store,'vm_owner',None))
+        with self.vm.exclusive():pass
+
     def test_unreachable_live_vm_cannot_change_settings(self):
         old=copy.deepcopy(DEFAULT)
         with patch.object(self.vm,'session',return_value={'pid':123}), patch.object(self.vm,'qmp',side_effect=OSError('offline')), patch('vm_runtime.pid_alive',return_value=True):
