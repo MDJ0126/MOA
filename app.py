@@ -328,10 +328,38 @@ class LocalFiles:
             raise ValueError('작업 폴더 밖의 경로는 허용되지 않습니다.')
         return p
 
+    def listing(self):
+        if self.folder.resolve()!=self.folder:raise ValueError('작업 폴더 경로가 변경되었습니다.')
+        marker='\n[목록 일부 생략]';names=[];size=0;scanned=0;pending=[self.folder];truncated=False
+        while pending and not truncated:
+            if scanned>=2000:truncated=True;break
+            folder=pending.pop()
+            try:info=folder.lstat()
+            except FileNotFoundError:continue
+            if not stat.S_ISDIR(info.st_mode) or getattr(info,'st_file_attributes',0)&0x400 or folder.resolve()!=folder:continue
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if scanned>=2000:truncated=True;break
+                    scanned+=1
+                    try:info=entry.stat(follow_symlinks=False)
+                    except FileNotFoundError:continue
+                    if getattr(info,'st_file_attributes',0)&0x400 or stat.S_ISLNK(info.st_mode):continue
+                    path=Path(entry.path)
+                    if path.resolve()!=path:continue
+                    if stat.S_ISDIR(info.st_mode):pending.append(path)
+                    elif stat.S_ISREG(info.st_mode):
+                        try:actual=path.lstat()
+                        except FileNotFoundError:continue
+                        if not stat.S_ISREG(actual.st_mode) or actual.st_nlink!=1 or getattr(actual,'st_file_attributes',0)&0x400:continue
+                        name=str(path.relative_to(self.folder));added=len(name)+(1 if names else 0)
+                        if size+added>20000-len(marker):truncated=True;break
+                        names.append(name);size+=added
+        return '\n'.join(names)+(marker if truncated else '')
+
     def execute(self, action, writable):
         op = action.get('tool')
         if op == 'list':
-            return '\n'.join(str(p.relative_to(self.folder)) for p in self.folder.rglob('*') if p.is_file())[:20000]
+            return self.listing()
         p = self.path(action.get('path', ''))
         if op == 'read':
             initial=p.lstat()
