@@ -1,6 +1,9 @@
 from pathlib import Path
 import tempfile
 import unittest
+import hashlib
+import json
+import zipfile
 from unittest.mock import patch
 from app import Store
 from data_backup import backup,restore
@@ -26,3 +29,18 @@ class BackupPathConsistencyTests(unittest.TestCase):
         folder=self.source/'tasks/task-one/workspace';folder.mkdir(parents=True);(folder/'example.py').write_bytes(b'answer=42\n')
         backup(self.source,self.archive);restore(self.archive,self.root/'restored')
         self.assertEqual((self.root/'restored/tasks/task-one/workspace/example.py').read_bytes(),b'answer=42\n')
+    def test_nonportable_archive_names_are_rejected_before_writing(self):
+        backup(self.source,self.archive)
+        with zipfile.ZipFile(self.archive) as original:
+            contents={name:original.read(name) for name in original.namelist()}
+        for index,name in enumerate(('tasks/a?.txt','tasks/a*.txt','tasks/a<.txt','tasks/a>.txt','tasks/a|.txt','tasks/a".txt','tasks/control\x01.txt','tasks/CON .txt')):
+            with self.subTest(name=name):
+                manifest=json.loads(contents['manifest.json']);payload=b'example'
+                manifest['files'][name]={'size':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+                archive=self.root/f'invalid-{index}.zip';destination=self.root/f'restored-{index}'
+                with zipfile.ZipFile(archive,'w') as output:
+                    for entry,value in contents.items():
+                        if entry!='manifest.json':output.writestr(entry,value)
+                    output.writestr('manifest.json',json.dumps(manifest));output.writestr('data/'+name,payload)
+                with self.assertRaisesRegex(ValueError,'백업 경로'):restore(archive,destination)
+                self.assertFalse(destination.exists())

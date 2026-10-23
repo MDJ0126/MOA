@@ -46,7 +46,7 @@ def manifest_object(pairs):
 def checked_backup_path(name,aliases):
     parts=PurePosixPath(name).parts
     reserved={'CON','PRN','AUX','NUL'}|{f'{prefix}{i}' for prefix in ('COM','LPT') for i in range(1,10)}
-    if not parts or PurePosixPath(name).as_posix()!=name or any(p in ('.','..') or p.endswith((' ','.')) or p.split('.')[0].upper() in reserved for p in parts) or '\\' in name or ':' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold()=='vm' or 'vbox-private' in tuple(p.casefold() for p in parts):
+    if not parts or PurePosixPath(name).as_posix()!=name or any(p in ('.','..') or p.endswith((' ','.')) or p.split('.')[0].rstrip(' ').upper() in reserved for p in parts) or any(c in '<>:"|?*' or ord(c)<32 for c in name) or '\\' in name or name.startswith('/') or name.casefold() in SKIP or parts[0].casefold()=='vm' or 'vbox-private' in tuple(p.casefold() for p in parts):
         raise ValueError('잘못된 백업 경로입니다.')
     for index in range(1,len(parts)+1):
         prefix='/'.join(parts[:index]);folded=prefix.casefold()
