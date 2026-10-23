@@ -139,16 +139,17 @@ class SetupTests(unittest.TestCase):
         for agent in team['agents']:agent['capabilities']=['planner','developer','reviewer','reporter']
         save_team(self.store,team)
         service=SlackService(self.store);service.config=slack_config();connection=dict(service.config['connections'][0],agent_id='checker')
-        original=self.store.log;observed=[]
-        def inspect_commit(tid,agent,kind,content):
-            if kind=='instruction':
-                with self.store.connect() as c:
-                    row=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
-                    thread=c.execute('SELECT thread_ts FROM slack_threads WHERE task_id=?',(tid,)).fetchone()
-                self.assertEqual(set(json.loads(row[0])['assignment'].values()),{'checker'})
-                self.assertEqual(thread[0],'400.1');observed.append(tid)
-            original(tid,agent,kind,content)
-        with patch.object(self.store,'log',inspect_commit):
+        original=self.store.add;observed=[]
+        def inspect_commit(*args,**kwargs):
+            tid=original(*args,**kwargs)
+            with self.store.connect() as c:
+                row=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
+                thread=c.execute('SELECT thread_ts FROM slack_threads WHERE task_id=?',(tid,)).fetchone()
+                instructions=c.execute("SELECT COUNT(*) FROM messages WHERE task_id=? AND kind='instruction'",(tid,)).fetchone()[0]
+            self.assertEqual(set(json.loads(row[0])['assignment'].values()),{'checker'})
+            self.assertEqual(thread[0],'400.1');self.assertEqual(instructions,1);observed.append(tid)
+            return tid
+        with patch.object(self.store,'add',inspect_commit):
             service.receive({'event_id':'EvAtomic','event':{'type':'app_mention','user':'U12345678','channel':'C12345678','text':'build','ts':'400.1'}},connection)
         self.assertEqual(len(observed),1)
 

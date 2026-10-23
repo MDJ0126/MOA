@@ -54,6 +54,7 @@ class Store:
               task_id TEXT, agent TEXT, kind TEXT, content TEXT, created REAL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
             CREATE TABLE IF NOT EXISTS backup_requests(request_key TEXT PRIMARY KEY,file TEXT UNIQUE,state TEXT,helper_pid INTEGER,created REAL);
+            CREATE TABLE IF NOT EXISTS message_requests(request_key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,delivery_id INTEGER NOT NULL);
             INSERT OR IGNORE INTO settings VALUES('paused','false');
             ''')
             columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
@@ -127,22 +128,18 @@ class Store:
                 raise ValueError('검증 코드 또는 수정 횟수 설정 오류')
             if not isinstance(required_files or [],list) or any(not isinstance(p,str) for p in (required_files or [])):
                 raise ValueError('필수 파일 목록 오류')
-            try:
-                c.execute('INSERT INTO tasks(id,title,mode,status,created,acceptance,max_revisions,auto_recover,required_files,execution_plan,source_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                      (tid, title, mode, 'queued', time.time(),acceptance,int(max_revisions),int(auto_recover),json.dumps(required_files or []),json.dumps(plan,ensure_ascii=False),source_key))
-                if fingerprint:c.execute('UPDATE tasks SET request_fingerprint=? WHERE id=?',(fingerprint,tid))
-                c.execute('UPDATE tasks SET revision_budget=? WHERE id=?',(int(max_revisions),tid))
-                if slack_context:
-                    c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_context['channel'],slack_context['thread_ts'],slack_context['connection_id']))
-                slack_config=read_setting(self,'slack',{})
-                if not source_key and slack_config.get('enabled') and slack_config.get('notify') and slack_config.get('channel'):
-                    connections=slack_config['connections']
-                    connection=next((x for x in connections if x['agent_id']=='shared'),connections[0])
-                    c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_config['channel'],'',connection['id']))
-            except sqlite3.IntegrityError:
-                if source_key:return c.execute('SELECT id FROM tasks WHERE source_key=?',(source_key,)).fetchone()[0]
-                raise
-        self.log(tid, 'user', 'instruction', title)
+            c.execute('INSERT INTO tasks(id,title,mode,status,created,acceptance,max_revisions,auto_recover,required_files,execution_plan,source_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                  (tid, title, mode, 'queued', time.time(),acceptance,int(max_revisions),int(auto_recover),json.dumps(required_files or []),json.dumps(plan,ensure_ascii=False),source_key))
+            if fingerprint:c.execute('UPDATE tasks SET request_fingerprint=? WHERE id=?',(fingerprint,tid))
+            c.execute('UPDATE tasks SET revision_budget=? WHERE id=?',(int(max_revisions),tid))
+            if slack_context:
+                c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_context['channel'],slack_context['thread_ts'],slack_context['connection_id']))
+            slack_config=read_setting(self,'slack',{})
+            if not source_key and slack_config.get('enabled') and slack_config.get('notify') and slack_config.get('channel'):
+                connections=slack_config['connections']
+                connection=next((x for x in connections if x['agent_id']=='shared'),connections[0])
+                c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_config['channel'],'',connection['id']))
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'user','instruction',title,time.time()))
         return tid
 
     def snapshot(self, limit=None):
@@ -180,11 +177,20 @@ class Store:
                     raise ValueError('취소 가능한 작업이 없습니다.')
             else:
                 raise ValueError('지원하지 않는 제어입니다.')
-        self.log(tid or '-', 'system', 'control', action)
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid or '-','system','control',action,time.time()))
 
-    def deliver(self, tid, sender, recipient, content,require_running=False,handoff=None):
+    def deliver(self, tid, sender, recipient, content,require_running=False,handoff=None,request_key=None):
+        fingerprint=''
+        if request_key is not None:
+            if not isinstance(request_key,str) or not __import__('re').fullmatch(r'[A-Za-z0-9_-]{8,80}',request_key):raise ValueError('메시지 요청 ID 오류')
+            fingerprint=hashlib.sha256(json.dumps([tid,sender,recipient,content,handoff],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
+            if request_key is not None:
+                previous=c.execute('SELECT fingerprint FROM message_requests WHERE request_key=?',(request_key,)).fetchone()
+                if previous:
+                    if previous[0]!=fingerprint:raise ValueError('같은 요청 ID에 다른 메시지가 전달되었습니다.')
+                    return True
             if require_running:
                 task=c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()
                 if not task or task[0]!='running':return False
@@ -194,9 +200,10 @@ class Store:
             capability=content.get('capability','')
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'message',f'{sender} → {recipient}: '+json.dumps(content,ensure_ascii=False),time.time(),recipient,capability))
             if handoff is not None:c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'handoff',json.dumps(handoff,ensure_ascii=False),time.time(),recipient,capability))
+            if request_key is not None:c.execute('INSERT INTO message_requests VALUES(?,?,?)',(request_key,fingerprint,cursor.lastrowid))
         return True
 
-    def message(self,tid,recipient,content):
+    def message(self,tid,recipient,content,request_key=None):
         with self.connect() as c:
             row=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
         if not row:raise ValueError('작업 없음')
@@ -213,7 +220,7 @@ class Store:
         with self.connect() as c:
             if not c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone():raise ValueError('작업 없음')
         payload={'recipient':recipient,'summary':content,'target_role':target_role}
-        self.deliver(tid,'user',recipient,payload,handoff=payload)
+        self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key)
 
 
 class LocalFiles:
@@ -717,7 +724,7 @@ def serve(root, port, model, url):
                 elif self.path=='/api/slack/test':
                     self.send(200,test_connection(store,data))
                 elif self.path == '/api/messages':
-                    store.message(data['id'],data['recipient'],data['content']);self.send(201,{'ok':True})
+                    store.message(data['id'],data['recipient'],data['content'],request_key=data.get('request_key'));self.send(201,{'ok':True})
                 elif self.path == '/api/control':
                     if data['action'] == 'shutdown':
                         store.control('pause')
@@ -732,7 +739,7 @@ def serve(root, port, model, url):
                 self.send(409,{'error':str(e),'code':'settings_conflict'})
             except (ValueError, KeyError, TypeError,UnicodeError) as e:
                 self.send(400,{'error':str(e)})
-            except OSError:
+            except (OSError,sqlite3.Error):
                 self.send(503,{'error':'로컬 저장소에 접근하지 못했습니다. 현재 Windows 사용자와 폴더 권한을 확인하세요.'})
         def log_message(self, *args):
             pass
