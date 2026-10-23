@@ -41,6 +41,15 @@ ROLES = ('planner', 'developer', 'reviewer', 'reporter')
 LABELS = dict(zip(ROLES, ('계획', '개발', '검증', '보고')))
 CONFIG=json.loads((ROOT/'config.json').read_text(encoding='utf-8')) if (ROOT/'config.json').exists() else {}
 SOURCE_STATE=SourceState(ROOT)
+RESERVED_FILE_NAMES={'CON','PRN','AUX','NUL'}|{f'{prefix}{number}' for prefix in ('COM','LPT') for number in range(1,10)}
+
+
+def checked_file_name(name):
+    if not isinstance(name,str):raise ValueError('유효하지 않은 상대 파일 경로입니다.')
+    normalized=name.replace('\\','/');parts=normalized.split('/')
+    if not name or normalized.startswith('/') or any(char in '<>:"|?*' or ord(char)<32 for char in name):raise ValueError('유효하지 않은 상대 파일 경로입니다.')
+    if any(part in ('','.','..') or part.rstrip(' .')!=part or part.split('.')[0].rstrip(' ').upper() in RESERVED_FILE_NAMES for part in parts):raise ValueError('예약 이름 또는 유효하지 않은 파일 경로입니다.')
+    return normalized
 
 
 def has_vm_input(plan,role):
@@ -204,6 +213,7 @@ class Store:
                 raise ValueError('검증 코드 또는 수정 횟수 설정 오류')
             if not isinstance(required_files or [],list) or any(not isinstance(p,str) for p in (required_files or [])):
                 raise ValueError('필수 파일 목록 오류')
+            for name in required_files or []:checked_file_name(name)
             c.execute('INSERT INTO tasks(id,title,mode,status,created,acceptance,max_revisions,auto_recover,required_files,execution_plan,source_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                   (tid, title, mode, 'queued', time.time(),acceptance,int(max_revisions),int(auto_recover),json.dumps(required_files or []),json.dumps(plan,ensure_ascii=False),source_key))
             if fingerprint:c.execute('UPDATE tasks SET request_fingerprint=? WHERE id=?',(fingerprint,tid))
@@ -321,9 +331,7 @@ class LocalFiles:
         self.folder.mkdir(parents=True, exist_ok=True)
 
     def path(self, name):
-        if not isinstance(name,str) or ':' in name or any(part.rstrip(' .')!=part for part in name.replace('\\','/').split('/')):
-            raise ValueError('유효하지 않은 상대 경로입니다.')
-        p = (self.folder / name).resolve()
+        p = (self.folder / checked_file_name(name)).resolve()
         if not p.is_relative_to(self.folder) or p == self.folder:
             raise ValueError('작업 폴더 밖의 경로는 허용되지 않습니다.')
         return p
@@ -375,6 +383,7 @@ class LocalFiles:
             if len(content)>200000:raise ValueError('읽기 한도 200KB를 초과했습니다.')
             return content.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
         if op == 'write' and writable:
+            if p.is_dir():raise ValueError('디렉터리는 파일 내용으로 덮어쓸 수 없습니다.')
             content = action.get('content', '')
             if not isinstance(content, str) or len(content.encode()) > 200000:
                 raise ValueError('쓰기 한도 200KB를 초과했습니다.')
