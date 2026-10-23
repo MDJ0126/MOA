@@ -9,7 +9,8 @@ def recipient_of(message):
         value=json.loads(message.get('content',''))
         if isinstance(value,dict):return value.get('recipient','')
     except (ValueError,TypeError):pass
-    match=re.match(r'^[^ ]+ → ([^:]+): ',message.get('content','')) if message.get('kind')=='message' else None
+    content=message.get('content')
+    match=re.match(r'^[^ ]+ → ([^:]+): ',content) if message.get('kind')=='message' and isinstance(content,str) else None
     return match[1] if match else ''
 
 

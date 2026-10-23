@@ -55,4 +55,17 @@ class HistoryRecoveryTests(unittest.TestCase):
             self.assertTrue(export['plan_unavailable']);self.assertIn('ADDRESSED_MARKER',str(export['messages']))
             with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],'{broken')
 
+    def test_null_legacy_message_keeps_history_and_exports_readable(self):
+        with self.server() as (store,tid,base):
+            with store.connect() as c:
+                c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'builder','message',None,time.time()))
+                seq=c.execute('SELECT max(seq) FROM messages').fetchone()[0]
+            for route in ('/api/logs?task=','/api/logs/export?task='):
+                for suffix in ('','&agent=builder'):
+                    with self.subTest(route=route,suffix=suffix),urllib.request.urlopen(base+route+tid+suffix,timeout=5) as response:
+                        result=json.load(response)
+                    row=next(message for message in result['messages'] if message['seq']==seq)
+                    self.assertIsNone(row['content']);self.assertTrue(result['plan_unavailable'])
+            with store.connect() as c:self.assertIsNone(c.execute('SELECT content FROM messages WHERE seq=?',(seq,)).fetchone()[0])
+
 if __name__=='__main__':unittest.main()
