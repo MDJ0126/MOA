@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -81,13 +82,45 @@ def pid_alive(pid):
     except PermissionError:return True
 class VM:
     def __init__(self,store):
-        self.store=store;self.folder=store.root/'vm';self.folder.mkdir(exist_ok=True)
+        self.store=store;self.folder=store.root/'vm'
+        if self.folder.resolve()!=store.root.resolve()/'vm':raise ValueError('VM 실행 기록은 데이터 폴더 내부에 보관해야 합니다.')
+        self.folder.mkdir(exist_ok=True)
         self.thread_lock=threading.Lock();self.session_file=self.folder/'session.json'
-        self.process=None
+        self.process=None;self.starting_file=self.folder/'starting.json'
+
+    def _record(self,path):
+        try:original=path.lstat()
+        except FileNotFoundError:return None
+        except OSError as error:raise ValueError('VM 실행 기록에 접근하지 못했습니다.') from error
+        try:
+            if not stat.S_ISREG(original.st_mode) or original.st_nlink!=1 or getattr(original,'st_file_attributes',0)&0x400 or original.st_size>65536:raise ValueError('VM 실행 기록 파일 형식을 확인하세요.')
+            with path.open('rb') as stream:
+                opened=os.fstat(stream.fileno())
+                if (opened.st_dev,opened.st_ino)!=(original.st_dev,original.st_ino) or opened.st_nlink!=1:raise ValueError('VM 실행 기록이 읽기 중 변경되었습니다.')
+                raw=stream.read(65537)
+            if len(raw)>65536:raise ValueError('VM 실행 기록이 너무 큽니다.')
+            value=json.loads(raw)
+            if not isinstance(value,dict) or type(value.get('port')) is not int or not 1<=value['port']<=65535 or not isinstance(value.get('name'),str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}',value['name']):raise ValueError('VM 실행 기록의 소유 정보를 확인하세요.')
+            return value
+        except (OSError,ValueError,RecursionError) as error:raise ValueError('VM 실행 기록을 확인하지 못했습니다. 기존 VM 종료 여부를 확인하세요.') from error
 
     def session(self):
-        try:return json.loads(self.session_file.read_text(encoding='utf-8'))
-        except (OSError,ValueError):return {}
+        value=self._record(self.session_file)
+        if value is None:return {}
+        if type(value.get('pid')) is not int or not 0<value['pid']<=0xffffffff:raise ValueError('VM 실행 기록의 PID를 확인하세요.')
+        return value
+
+    def _clear_starting(self,claim):
+        if self._record(self.starting_file)==claim:self.starting_file.unlink()
+
+    def _publish_session(self,value):
+        temporary=self.folder/('session-'+uuid.uuid4().hex+'.tmp');created=False
+        try:
+            with temporary.open('xb') as stream:
+                created=True;stream.write(json.dumps(value).encode());stream.flush();os.fsync(stream.fileno())
+            temporary.replace(self.session_file)
+        finally:
+            if created:temporary.unlink(missing_ok=True)
 
     def qmp(self,command,arguments=None):
         session=self.session()
@@ -111,10 +144,12 @@ class VM:
             return send(command,arguments)
 
     def status(self):
-        config=settings(self.store);session=self.session();state='stopped';error=''
-        if session:
-            try:state=self.qmp('query-status')['status']
-            except (OSError,ValueError) as e:error=str(e);state='unreachable'
+        config=settings(self.store);state='stopped';error=''
+        try:
+            session=self.session();pending=self._record(self.starting_file)
+            if pending:raise ValueError('VM 시작 확인이 끝나지 않았습니다. 기존 VM 종료 여부와 실행 기록을 확인하세요.')
+            if session:state=self.qmp('query-status')['status']
+        except (OSError,ValueError) as e:error=str(e);state='unreachable'
         lease=read_setting(self.store,'vm_owner',None)
         if lease and not self.thread_lock.locked():
             # Test the OS lock too: another worker process may own the desktop.
@@ -166,6 +201,7 @@ class VM:
                 if resolved.suffix.lower() not in (('.iso',) if key=='iso' else ('.qcow2','.img')):raise ValueError('ISO 또는 qcow2/img 파일을 지정하세요.')
                 config[key]=resolved.relative_to(ROOT).as_posix()
         with self.exclusive():
+            if self._record(self.starting_file):raise ValueError('VM 시작 확인이 끝나지 않아 설정 변경을 보류합니다.')
             if self.session():
                 try:self.qmp('query-status')
                 except (OSError,ValueError):
@@ -178,10 +214,15 @@ class VM:
     def _start(self):
         config=settings(self.store)
         if not config['enabled']:raise ValueError('설정에서 공유 VM 사용을 켜 주세요.')
-        if self.session():
-            try:return self.qmp('query-status')
+        if self._record(self.starting_file):raise ValueError('VM 시작 확인이 끝나지 않았습니다. 중복 VM은 시작하지 않습니다.')
+        session=self.session()
+        if session:
+            try:status=self.qmp('query-status')
             except (OSError,ValueError):
-                if pid_alive(self.session().get('pid')):raise ValueError('기존 VM 프로세스의 제어 연결을 확인하지 못했습니다. 중복 VM은 시작하지 않습니다.') from None
+                if pid_alive(session['pid']):raise ValueError('기존 VM 프로세스의 제어 연결을 확인하지 못했습니다. 중복 VM은 시작하지 않습니다.') from None
+            else:
+                if not isinstance(session.get('config'),dict) or not same_configuration(session['config'],config):raise ValueError('기존 VM의 설정 기록이 현재 설정과 일치하지 않습니다. 중복 VM은 시작하지 않습니다.')
+                return status
         if config['accelerator']=='whpx':
             capability=whpx_capability()
             if capability['available'] is not True:raise ValueError(capability['reason']+' TCG를 사용하거나 Windows Hypervisor Platform 설정을 확인한 뒤 다시 시도하세요.')
@@ -195,9 +236,29 @@ class VM:
               '-display','none','-vga','virtio' if not config['disk'] else 'std','-qmp',f'tcp:127.0.0.1:{port},server=on,wait=off','-cdrom',str(iso),'-boot','c' if config['disk'] else 'd','-device','usb-tablet','-usb',
               '-nic','user' if config['network'] else 'none','-no-reboot']
         if config['disk']:args+=['-drive',f"file={ROOT/config['disk']},format={'qcow2' if config['disk'].endswith('.qcow2') else 'raw'},if=ide"]
-        with (self.folder/'qemu.log').open('ab') as output:
-            self.process=subprocess.Popen(args,stdout=output,stderr=output,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        self.session_file.write_text(json.dumps({'pid':self.process.pid,'port':port,'name':name,'started':time.time()}),encoding='utf-8')
+        claim={'name':name,'port':port,'started':time.time()}
+        with self.starting_file.open('x',encoding='utf-8') as stream:
+            json.dump(claim,stream);stream.flush();os.fsync(stream.fileno())
+        child=None
+        try:
+            with (self.folder/'qemu.log').open('ab') as output:
+                child=subprocess.Popen(args,stdout=output,stderr=output,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));self.process=child
+            self._publish_session({'pid':child.pid,**claim,'config':config})
+            self._clear_starting(claim)
+        except BaseException as error:
+            closed=child is None and isinstance(error,OSError)
+            if child is not None:
+                try:
+                    if child.poll() is None:
+                        child.terminate()
+                        try:child.wait(timeout=5)
+                        except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+                    closed=True;self.process=None
+                except (OSError,subprocess.TimeoutExpired):pass
+            if closed:
+                try:self._clear_starting(claim)
+                except (OSError,ValueError):pass
+            raise
         for _ in range(50):
             try:return self.qmp('query-status')
             except (OSError,ValueError):
@@ -209,11 +270,25 @@ class VM:
         with self.exclusive():return self._start()
     def stop(self):
         with self.exclusive():
-            self.qmp('quit');self.session_file.unlink(missing_ok=True)
-            if self.process:
+            session=self.session()
+            if not session:raise ValueError('공유 VM이 실행 중이 아닙니다.')
+            try:self.qmp('quit')
+            except (OSError,ValueError):
+                if pid_alive(session['pid']):raise ValueError('VM 종료를 확인하지 못했습니다. 실행 기록을 보존합니다.') from None
+            if self.process is not None and self.process.pid==session['pid']:
                 try:self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:pass
+                except subprocess.TimeoutExpired:raise ValueError('VM 종료 대기 시간이 초과되었습니다. 실행 기록을 보존합니다.') from None
+            else:
+                for _ in range(20):
+                    if not pid_alive(session['pid']):break
+                    time.sleep(.1)
+                else:raise ValueError('VM 프로세스 종료를 확인하지 못했습니다. 실행 기록을 보존합니다.')
+            if self.session()!=session:raise ValueError('VM 실행 기록이 변경되어 자동 정리를 보류합니다.')
+            self.session_file.unlink()
+            claim=self._record(self.starting_file)
+            if claim and claim['name']==session['name'] and claim['port']==session['port']:self._clear_starting(claim)
         return {'state':'stopped'}
+
 
     def capture(self,path):
         path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)

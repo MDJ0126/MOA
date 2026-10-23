@@ -40,5 +40,5 @@ class WHPXTests(unittest.TestCase):
     def test_existing_vm_status_does_not_probe_or_spawn_again(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
             store=Store(temporary);vm=VM(store);write_setting(store,'vm',dict(DEFAULT,enabled=True,accelerator='whpx'))
-            with patch.object(vm,'session',return_value={'pid':123}),patch.object(vm,'qmp',return_value={'status':'running'}),patch('vm_runtime.whpx_capability') as probe,patch('vm_runtime.subprocess.Popen') as spawn:
+            with patch.object(vm,'session',return_value={'pid':123,'port':1234,'name':'moa-owned','config':dict(DEFAULT,enabled=True,accelerator='whpx')}),patch.object(vm,'qmp',return_value={'status':'running'}),patch('vm_runtime.whpx_capability') as probe,patch('vm_runtime.subprocess.Popen') as spawn:
                 self.assertEqual(vm.start(),{'status':'running'});probe.assert_not_called();spawn.assert_not_called()
