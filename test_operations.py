@@ -5,11 +5,11 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,MagicMock
 from app import Store,Worker
 from setup_config import PRESETS,save_team
 from supervisor import ManagedChild
-from soak import run
+from soak import run,stop_owned_app
 from health import status as observed_status
 import threading
 
@@ -73,3 +73,24 @@ class OperationTests(unittest.TestCase):
         self.assertFalse(result['actual_model_tested'])
         config=json.loads((self.root/'soak/source/config.json').read_text(encoding='utf-8'))
         self.assertEqual(config['model_url'],'http://127.0.0.1:0');self.assertEqual(config['default_mode'],'demo')
+
+
+class OwnedSoakShutdownTests(unittest.TestCase):
+    def test_shutdown_uses_instance_request_and_no_http(self):
+        child=MagicMock();child.process.pid=1234;child.process.poll.return_value=None
+        with patch('soak.request_stop') as stop,patch('soak.urllib.request.urlopen',side_effect=AssertionError('HTTP shutdown forbidden')):
+            stop_owned_app(child,Path('owned-source'),43210)
+        stop.assert_called_once_with(Path('owned-source'),43210,expected_pid=1234)
+        child.process.wait.assert_called_once_with(timeout=10);child.close.assert_called_once()
+
+    def test_failed_stop_falls_back_only_to_owned_child(self):
+        for error in (OSError('registration unavailable'),ValueError('PID mismatch'),subprocess.TimeoutExpired('owned',10)):
+            with self.subTest(error=type(error).__name__):
+                child=MagicMock();child.process.poll.return_value=None
+                with patch('soak.request_stop',side_effect=error):stop_owned_app(child,Path('owned-source'),43210)
+                child.close.assert_called_once();child.process.wait.assert_not_called()
+
+    def test_exited_child_does_not_request_stop(self):
+        child=MagicMock();child.process.poll.return_value=0
+        with patch('soak.request_stop') as stop:stop_owned_app(child,Path('owned-source'),43210)
+        stop.assert_not_called();child.close.assert_called_once()

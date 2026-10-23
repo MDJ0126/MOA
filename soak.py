@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import urllib.request
 import uuid
 import zipfile
 from supervisor import ManagedChild,acquire,write_status
+from app_lifecycle import request_stop
 
 ROOT=Path(__file__).resolve().parent
 MODULES=('app_lifecycle','stop_app','private_files','vbox_install','vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
@@ -36,6 +38,17 @@ def verify_bundle(data,tid):
         for item in report['files']:
             if hashlib.sha256(archive.read('workspace/'+item['path'].replace('\\','/'))).hexdigest()!=item['sha256']:raise ValueError('artifact hash mismatch')
         return report['report_id']
+
+
+def stop_owned_app(child,source,port):
+    """Use project/instance ownership; never send shutdown to a reused TCP port."""
+    try:
+        if child.process is not None and child.process.poll() is None:
+            try:
+                request_stop(source,port,expected_pid=child.process.pid)
+                child.process.wait(timeout=10)
+            except (OSError,ValueError,TimeoutError, subprocess.TimeoutExpired):pass
+    finally:child.close()
 
 
 def run(directory,seconds=86400,interval=30,job_interval=300):
@@ -94,11 +107,7 @@ def run(directory,seconds=86400,interval=30,job_interval=300):
         except KeyboardInterrupt:result['status']='stopped'
         except Exception as error:result.update(status='failed',error=type(error).__name__+': '+str(error))
         finally:
-            try:
-                if child.process is not None and child.process.poll() is None and request('/api/health')['app']['pid']==child.process.pid:
-                    request('/api/control',{'action':'shutdown'});child.process.wait(timeout=10)
-            except Exception:pass
-            child.close();save()
+            stop_owned_app(child,directory/'source',port);save()
         return result
 
 
