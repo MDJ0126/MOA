@@ -154,7 +154,12 @@ def run(directory,seconds=86400,interval=30,job_interval=300,task_timeout=60,kee
         except KeyboardInterrupt:result['status']='stopped'
         except Exception as error:result.update(status='failed',error=type(error).__name__+': '+str(error))
         finally:
-            stop_owned_app(child,directory/'source',port);save()
+            try:stop_owned_app(child,directory/'source',port)
+            except Exception as error:
+                detail=type(error).__name__+': '+str(error)
+                result.update(status='failed',demo_24h_observed=False,cleanup_error=detail)
+                result.setdefault('error',detail)
+            finally:save()
         return result
 
 

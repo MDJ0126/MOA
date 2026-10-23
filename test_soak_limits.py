@@ -13,7 +13,7 @@ class SoakLimitTests(unittest.TestCase):
         self.root=Path(self.temp.name)
     def tearDown(self):self.temp.cleanup()
 
-    def simulate(self,paused=False,**options):
+    def simulate(self,paused=False,stop_error=None,**options):
         clock=[0.0];child=MagicMock();child.process.pid=123;child.process.poll.return_value=None;child.status.return_value={}
         requests=[]
         def freeze(destination):
@@ -26,7 +26,7 @@ class SoakLimitTests(unittest.TestCase):
             else:data={'tasks':[{'id':'0123456789ab','status':'queued'}]}
             stream=io.BytesIO(json.dumps(data).encode());stream.headers={'Content-Type':'application/json'};return stream
         def sleep(seconds):clock[0]+=seconds
-        with patch('soak.freeze',side_effect=freeze),patch('soak.ManagedChild',return_value=child),patch('soak.stop_owned_app') as stop,patch('soak.urllib.request.urlopen',side_effect=response),patch('soak.time.monotonic',side_effect=lambda:clock[0]),patch('soak.time.sleep',side_effect=sleep):
+        with patch('soak.freeze',side_effect=freeze),patch('soak.ManagedChild',return_value=child),patch('soak.stop_owned_app',side_effect=stop_error) as stop,patch('soak.urllib.request.urlopen',side_effect=response),patch('soak.time.monotonic',side_effect=lambda:clock[0]),patch('soak.time.sleep',side_effect=sleep):
             result=run(self.root/'run',seconds=600,interval=.2,job_interval=1,**options)
         if options.get('max_bytes')==1:child.step.assert_not_called()
         stop.assert_called_once();return result,requests
@@ -41,6 +41,13 @@ class SoakLimitTests(unittest.TestCase):
         self.assertEqual(result['status'],'failed');self.assertIn('task timeout',result['error'])
         self.assertLess(result['elapsed_seconds'],3);self.assertEqual(result['pending_task'],'0123456789ab')
         self.assertFalse(result['demo_24h_observed'])
+
+    def test_shutdown_failure_still_records_terminal_state_and_original_error(self):
+        result,_=self.simulate(paused=True,stop_error=OSError('close failed'))
+        self.assertEqual(result['status'],'failed');self.assertIn('queue paused',result['error'])
+        self.assertIn('close failed',result['cleanup_error']);self.assertFalse(result['demo_24h_observed'])
+        saved=json.loads((self.root/'run/status.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'],'failed');self.assertEqual(saved['cleanup_error'],result['cleanup_error'])
 
     def test_byte_budget_fails_and_preserves_evidence(self):
         result,requests=self.simulate(max_bytes=1)
