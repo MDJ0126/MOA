@@ -37,14 +37,17 @@ class HistoryRecoveryTests(unittest.TestCase):
                         try:request_stop(project,port,expected_pid=process.pid);process.wait(timeout=10)
                         except Exception:process.terminate();process.wait(timeout=10)
     def test_binary_and_structural_damage_keeps_state_and_history_readable(self):
-        for raw in (b'\xff\x00','[]','{"agents":null}','0'):
-            with self.subTest(raw=raw),self.server(raw) as (store,tid,base):
-                with urllib.request.urlopen(base+'/api/state',timeout=5) as response:state=json.load(response)
-                task=next(t for t in state['tasks'] if t['id']==tid)
-                self.assertTrue(task['execution_plan_unavailable'])
-                with urllib.request.urlopen(base+'/api/logs?task='+tid+'&agent=builder',timeout=5) as response:result=json.load(response)
-                self.assertTrue(result['plan_unavailable']);self.assertIn('ADDRESSED_MARKER',str(result['messages']))
-                with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
+        values=(b'\xff\x00','[]','{"agents":null}','0')
+        with self.server(values[0]) as (store,tid,base):
+            for raw in values:
+                with self.subTest(raw=raw):
+                    with store.connect() as c:c.execute('UPDATE tasks SET execution_plan=? WHERE id=?',(raw,tid))
+                    with urllib.request.urlopen(base+'/api/state',timeout=5) as response:state=json.load(response)
+                    task=next(t for t in state['tasks'] if t['id']==tid)
+                    self.assertTrue(task['execution_plan_unavailable'])
+                    with urllib.request.urlopen(base+'/api/logs?task='+tid+'&agent=builder',timeout=5) as response:result=json.load(response)
+                    self.assertTrue(result['plan_unavailable']);self.assertIn('ADDRESSED_MARKER',str(result['messages']))
+                    with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
 
     def test_corrupt_plan_keeps_original_history_readable_and_exportable(self):
         with self.server() as (store,tid,base):
@@ -86,16 +89,18 @@ class HistoryRecoveryTests(unittest.TestCase):
 
     def test_nonfinite_plan_metadata_does_not_leak_nonstandard_json(self):
         from setup_config import legacy_plan
-        for number in ('NaN','Infinity','-Infinity','1e309'):
-            plan=legacy_plan();plan['legacy_metadata']={'limit':'NUMERIC_MARKER'}
-            raw=json.dumps(plan).replace('"NUMERIC_MARKER"',number)
-            with self.subTest(number=number),self.server(raw) as (store,tid,base):
-                for route in ('/api/logs/export?task='+tid,'/api/logs?task='+tid,'/api/state'):
-                    with urllib.request.urlopen(base+route,timeout=5) as response:
-                        value=json.loads(response.read(),parse_constant=lambda token:self.fail('nonstandard JSON constant: '+token))
-                    if route=='/api/state':self.assertTrue(next(task for task in value['tasks'] if task['id']==tid)['execution_plan_unavailable'])
-                    else:
-                        self.assertTrue(value['plan_unavailable']);self.assertIn('ORIGINAL_REQUEST_MARKER',str(value['messages']))
-                with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
+        plan=legacy_plan();plan['legacy_metadata']={'limit':'NUMERIC_MARKER'}
+        values=[(number,json.dumps(plan).replace('"NUMERIC_MARKER"',number)) for number in ('NaN','Infinity','-Infinity','1e309')]
+        with self.server(values[0][1]) as (store,tid,base):
+            for number,raw in values:
+                with self.subTest(number=number):
+                    with store.connect() as c:c.execute('UPDATE tasks SET execution_plan=? WHERE id=?',(raw,tid))
+                    for route in ('/api/logs/export?task='+tid,'/api/logs?task='+tid,'/api/state'):
+                        with urllib.request.urlopen(base+route,timeout=5) as response:
+                            value=json.loads(response.read(),parse_constant=lambda token:self.fail('nonstandard JSON constant: '+token))
+                        if route=='/api/state':self.assertTrue(next(task for task in value['tasks'] if task['id']==tid)['execution_plan_unavailable'])
+                        else:
+                            self.assertTrue(value['plan_unavailable']);self.assertIn('ORIGINAL_REQUEST_MARKER',str(value['messages']))
+                    with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
 
 if __name__=='__main__':unittest.main()
