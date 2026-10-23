@@ -27,7 +27,7 @@ class WorkerBoundaryTests(unittest.TestCase):
             def __init__(self,connection):self.connection=connection
             def execute(self,sql,parameters=()):
                 if sql.startswith("UPDATE tasks SET status='queued' WHERE id=?") and not fired:
-                    fired.append(True);store.control('cancel',tid)
+                    fired.append(True);store.control('cancel',tid,_connection=self.connection)
                 return self.connection.execute(sql,parameters)
             def __getattr__(self,name):return getattr(self.connection,name)
         @contextmanager
@@ -42,6 +42,26 @@ class WorkerBoundaryTests(unittest.TestCase):
         self.assertTrue(fired)
         self.assertEqual(self.store.snapshot()['tasks'][0]['status'],'cancelled')
         self.worker.stop.clear();self.store.control('resume');self.assertFalse(self.worker.tick())
+
+    def test_separate_connection_cancel_survives_atomic_pause_yield(self):
+        from concurrent.futures import ThreadPoolExecutor
+        tid=self.store.add('concurrent cancellation at pause','demo');original_connect=self.store.connect;original_run=Demo.run;store=self.store;futures=[]
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            class Connection:
+                def __init__(self,connection):self.connection=connection
+                def execute(self,sql,parameters=()):
+                    if sql.startswith("UPDATE tasks SET status='queued' WHERE id=?") and not futures:futures.append(pool.submit(store.control,'cancel',tid))
+                    return self.connection.execute(sql,parameters)
+                def __getattr__(self,name):return getattr(self.connection,name)
+            @contextmanager
+            def intercept():
+                with original_connect() as connection:yield Connection(connection)
+            def run(backend,task,role,*args):
+                if role=='planner':store.control('pause')
+                return original_run(backend,task,role,*args)
+            with patch.object(store,'connect',intercept),patch.object(Demo,'run',run):self.worker.tick()
+            self.assertEqual(len(futures),1);futures[0].result(timeout=10)
+        self.assertEqual(self.store.snapshot()['tasks'][0]['status'],'cancelled')
 
     def test_corrupt_queued_plan_is_held_without_backend_and_next_task_runs(self):
         tid=self.store.add('corrupt plan','demo');next_id=self.store.add('next task','demo')

@@ -84,7 +84,7 @@ class Store:
             columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
             for name,definition in {'revision':'INTEGER DEFAULT 0','max_revisions':'INTEGER DEFAULT 2',
                     'acceptance':"TEXT DEFAULT ''",'verification':"TEXT DEFAULT '{}'",'retry_at':'REAL DEFAULT 0',
-                    'wait_reason':"TEXT DEFAULT ''",'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER','artifact_publication':'TEXT'}.items():
+                    'wait_reason':"TEXT DEFAULT ''",'failures':'INTEGER DEFAULT 0','auto_recover':'INTEGER DEFAULT 0','required_files':"TEXT DEFAULT '[]'",'execution_plan':"TEXT DEFAULT ''",'source_key':'TEXT','request_fingerprint':"TEXT DEFAULT ''",'revision_budget':'INTEGER','artifact_publication':'TEXT','pending_instruction_stage':'INTEGER','instruction_review_required':'INTEGER DEFAULT 0'}.items():
                 if name not in columns:c.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             c.execute('UPDATE tasks SET revision_budget=MIN(5,max_revisions) WHERE revision_budget IS NULL')
             message_columns={r[1] for r in c.execute('PRAGMA table_info(messages)')}
@@ -209,6 +209,7 @@ class Store:
                 except environment_profiles.UnavailableEnvironment:raise
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError):raise ValueError('저장된 실행 계획·단계를 확인하지 못했습니다. 원래 요청을 확인해 새 작업으로 등록하세요.') from None
                 stage=task['stage']
+                if task['pending_instruction_stage'] is not None:stage=min(stage,task['pending_instruction_stage'])
                 if task['status']=='failed':stage=min(stage,plan['pipeline'].index('developer'))
                 revision=task['revision']+1
                 folder=self.root/'tasks'/tid;archive=folder/'attempts'/f'r{task["revision"]}'
@@ -216,7 +217,7 @@ class Store:
                     source=folder/name
                     if source.is_file():
                         archive.mkdir(parents=True,exist_ok=True);shutil.copy2(source,archive/name)
-                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',wait_reason='',failures=0,retry_at=0,artifact_publication='{}' WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
+                c.execute("UPDATE tasks SET status='queued',stage=?,revision=?,max_revisions=?,error='',wait_reason='',failures=0,retry_at=0,artifact_publication='{}',instruction_review_required=0 WHERE id=?",(stage,revision,revision+task['revision_budget'],tid))
             elif action == 'cancel':
                 if c.execute("UPDATE tasks SET status='cancelled',wait_reason='' WHERE id=? AND status IN ('queued','running','failed','interrupted')", (tid,)).rowcount != 1:
                     raise ValueError('취소 가능한 작업이 없습니다.')
@@ -261,10 +262,22 @@ class Store:
             recipient=plan['assignment'].get(recipient)
             if not recipient:raise ValueError('이 작업에서 실행하지 않는 역할입니다. 배정된 팀원을 선택하세요.')
         if recipient not in plan['assignment'].values():raise ValueError('이 작업에 배정되지 않은 팀원입니다. 배정된 담당자를 선택하세요.')
-        with self.connect() as c:
-            if not c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone():raise ValueError('작업 없음')
         payload={'recipient':recipient,'summary':content,'target_role':target_role}
-        self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key)
+        if request_key is not None and (not isinstance(request_key,str) or not __import__('re').fullmatch(r'[A-Za-z0-9_-]{8,80}',request_key)):raise ValueError('메시지 요청 ID 오류')
+        with self._write_transaction() as c:
+            if request_key is not None and c.execute('SELECT 1 FROM message_requests WHERE request_key=?',(request_key,)).fetchone():
+                self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key,_connection=c)
+                return {'recorded':True,'application':'already_recorded','execution_confirmed':False}
+            current=c.execute('SELECT status,stage,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+            if not current:raise ValueError('작업 없음')
+            if current['status'] not in ('queued','running','failed','interrupted'):raise ValueError('완료·취소된 작업에는 새 지시를 적용할 수 없습니다. 내용을 유지하고 새 작업으로 맡겨 주세요.')
+            candidates=[i for i,role in enumerate(plan['pipeline']) if plan['assignment'][role]==recipient and (not target_role or role==target_role)]
+            target=next((i for i in candidates if i>=current['stage']),candidates[0])
+            self.deliver(tid,'user',recipient,payload,handoff=payload,request_key=request_key,_connection=c)
+            pending=current['pending_instruction_stage'];pending=target if pending is None else min(pending,target)
+            c.execute('UPDATE tasks SET pending_instruction_stage=? WHERE id=?',(pending,tid))
+            return {'recorded':True,'application':'resume_required' if current['status'] in ('failed','interrupted') else 'pending_stage','target_stage':target,'execution_confirmed':False}
+
 
 
 class LocalFiles:
@@ -378,8 +391,9 @@ class Worker:
                     frozen=checked_plan(row)
                     pipeline=frozen['pipeline']
                     role=pipeline[row['stage']]
-                    blocked=has_vm_input(frozen,role)
-                    if blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
+                    blocked=bool(row['instruction_review_required']) or has_vm_input(frozen,role)
+                    if row['instruction_review_required']:error='추가 지시로 VM 입력 단계의 재실행 확인이 필요합니다. 게스트 상태 확인 후 수동으로 재개하세요.'
+                    elif blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
                     blocked=True;error=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
                 retry=not blocked and row['auto_recover'] and row['failures']<3
@@ -432,6 +446,20 @@ class Worker:
         return {str(p.relative_to(files.folder)):hash_file(p)
                 for p in workspace_files(files.folder)}
 
+    def defer_instruction(self,c,tid,plan,stage):
+        current=c.execute('SELECT status,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+        if not current or current['status']!='running':return False
+        target=current['pending_instruction_stage']
+        if target is None:return False
+        if type(target) is not int or not 0<=target<len(plan['pipeline']):raise ValueError('추가 지시의 담당 단계 기록 오류')
+        if target>stage:return False
+        review=any(has_vm_input(plan,role) for role in plan['pipeline'][target:stage+1])
+        message='추가 지시를 반영하기 위해 담당 단계부터 다시 진행합니다.'
+        if review:message='추가 지시로 VM 입력 재실행 확인이 필요합니다. 게스트 상태 확인 후 수동으로 재개하세요.'
+        c.execute("UPDATE tasks SET status=?,stage=?,revision=revision+1,max_revisions=max_revisions+1,verification='{}',artifact_publication='{}',instruction_review_required=?,wait_reason=?,retry_at=0,error=? WHERE id=?",('interrupted' if review else 'queued',target,int(review),'' if review else 'instruction_update',message,tid))
+        c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','control',message,time.time()))
+        return True
+
     def tick(self):
         s = self.store
         with s.connect() as c:
@@ -462,11 +490,14 @@ class Worker:
             files = LocalFiles(s.root / 'tasks' / tid / 'workspace')
             backend = Demo() if task['mode'] == 'demo' else Llama(self.model,self.url) if task['mode']=='llama' else Ollama(self.model, self.url)
             for stage in range(task['stage'], len(pipeline)):
-                with s.connect() as c:
-                    state = c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]
+                with s._write_transaction() as c:
+                    current=c.execute('SELECT status,pending_instruction_stage FROM tasks WHERE id=?',(tid,)).fetchone()
+                    state=current['status']
                     paused = c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == 'true'
-                    if state == 'cancelled':
-                        return True
+                    if state != 'running':return True
+                    pending=current['pending_instruction_stage']
+                    if pending is not None and pending<stage and self.defer_instruction(c,tid,plan,stage):return True
+                    if pending==stage:c.execute('UPDATE tasks SET pending_instruction_stage=NULL WHERE id=?',(tid,))
                     if paused or self.stop.is_set():
                         c.execute("UPDATE tasks SET status='queued' WHERE id=? AND status='running'", (tid,))
                         return True
@@ -475,8 +506,10 @@ class Worker:
                 task['agent']=next(a for a in plan['agents'] if a['id']==actor)
                 task['execution_environment']=plan.get('environment',{'kind':'local'})
                 def prepare_stage():
-                    with s.connect() as c:
-                        if c.execute("UPDATE tasks SET wait_reason='',error='' WHERE id=? AND status='running'",(tid,)).rowcount!=1:raise StageDeferred()
+                    with s._write_transaction() as c:
+                        deferred=self.defer_instruction(c,tid,plan,stage)
+                        if not deferred and c.execute("UPDATE tasks SET wait_reason='',error='' WHERE id=? AND status='running'",(tid,)).rowcount!=1:raise StageDeferred()
+                    if deferred:raise StageDeferred()
                     self.checkpoint(tid,stage,task['revision'],files)
                     if role=='reviewer':
                         verification=run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0}
@@ -513,10 +546,12 @@ class Worker:
                     feedback={'summary':result['summary'],'verification':task['verification'],'request':'실패 조건을 수정하고 다시 제출하세요.','capability':role}
                     if task['revision']<task['max_revisions']:
                         with s._write_transaction() as c:
+                            if self.defer_instruction(c,tid,plan,stage):return True
                             if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result,_connection=c):return True
                             c.execute("UPDATE tasks SET status='queued',stage=?,revision=revision+1,error='검증 실패: 자동 수정 대기' WHERE id=? AND status='running'",(pipeline.index('developer'),tid))
                         return True
                     with s._write_transaction() as c:
+                        if self.defer_instruction(c,tid,plan,stage):return True
                         if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result,_connection=c):return True
                         message='검증 실패: 최대 수정 회차에 도달했습니다.'
                         if has_vm_input(plan,role):message+=' VM 입력이 있는 단계입니다. 수동 재개 전에 게스트 상태를 확인하세요.'
@@ -527,6 +562,7 @@ class Worker:
                 recipient=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
                 if stage<len(pipeline)-1:
                     with s._write_transaction() as c:
+                        if self.defer_instruction(c,tid,plan,stage):return True
                         if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
                         c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'",(stage+1,tid))
                     continue
@@ -536,6 +572,7 @@ class Worker:
                         return True
                     with s.connect() as c:
                         c.execute('BEGIN IMMEDIATE')
+                        if self.defer_instruction(c,tid,plan,stage):return True
                         if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
                         if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
                         self.package(tid,'completed',task.get('verification'),_connection=c)
@@ -557,8 +594,9 @@ class Worker:
                 with s.connect() as c:c.execute("UPDATE tasks SET status='interrupted',wait_reason='',error='VM 대기 기록 저장 실패. 기록 확인 후 수동 재개하세요.' WHERE id=? AND status='running'",(tid,))
             return True
         except Exception as e:
-            with s.connect() as c:
+            with s._write_transaction() as c:
                 if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
+                if self.defer_instruction(c,tid,plan,locals().get('stage',task['stage'])):return True
             transient=e.retryable if isinstance(e,ModelError) else e.code in RETRY_STATUSES if isinstance(e,urllib.error.HTTPError) else isinstance(e,(urllib.error.URLError,TimeoutError,ConnectionError))
             retry=transient and task['failures']<2
             vm_input=has_vm_input(plan,role)
@@ -855,7 +893,7 @@ def serve(root, port, model, url,demo_only=False):
                 elif self.path=='/api/slack/test':
                     self.send(200,test_connection(store,data))
                 elif self.path == '/api/messages':
-                    store.message(data['id'],data['recipient'],data['content'],request_key=data.get('request_key'));self.send(201,{'ok':True})
+                    result=store.message(data['id'],data['recipient'],data['content'],request_key=data.get('request_key'));self.send(201,{'ok':True,**result})
                 elif self.path == '/api/control':
                     if data['action'] == 'shutdown':
                         store.control('pause')
