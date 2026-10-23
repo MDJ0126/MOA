@@ -12,7 +12,7 @@ function Resolve-MoaPython {
         if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { continue }
         if ($Candidate -like '*\Microsoft\WindowsApps\python.exe') { continue }
         try {
-            $Probe = & $Candidate -I -c 'import sys,json,sqlite3,ssl; print(json.dumps({"version":list(sys.version_info[:3]),"executable":sys.executable})); sys.exit(0 if sys.version_info >= (3,11) else 3)' 2>&1
+            $Probe = & $Candidate -I -c 'import sys,json,sqlite3,ssl; print(json.dumps(dict(version=list(sys.version_info[:3]),executable=sys.executable))); sys.exit(0 if sys.version_info >= (3,11) else 3)' 2>&1
             if ($LASTEXITCODE -eq 0) {
                 $Info = ($Probe -join "`n") | ConvertFrom-Json -ErrorAction Stop
                 if ($Info.executable) { return [string]$Info.executable }
