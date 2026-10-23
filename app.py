@@ -109,6 +109,16 @@ class Store:
         finally:
             c.close()
 
+    @contextmanager
+    def _write_transaction(self,connection=None):
+        if connection is not None:
+            if not connection.in_transaction:raise ValueError('활성 쓰기 트랜잭션이 필요합니다.')
+            yield connection
+            return
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            yield c
+
     def log(self, tid, agent, kind, content,recipient='',capability=''):
         with self.connect() as c:
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',
@@ -186,9 +196,8 @@ class Store:
                     'outbox_pending':c.execute("SELECT COUNT(*) FROM outbox WHERE state='pending'").fetchone()[0],
                     'paused': c.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0] == 'true'}
 
-    def control(self, action, tid=None):
-        with self.connect() as c:
-            c.execute('BEGIN IMMEDIATE')
+    def control(self, action, tid=None,*,_connection=None):
+        with self._write_transaction(_connection) as c:
             if action in ('pause', 'resume'):
                 c.execute("UPDATE settings SET value=? WHERE key='paused'", ('true' if action == 'pause' else 'false',))
             elif action == 'retry':
@@ -214,13 +223,12 @@ class Store:
                 raise ValueError('지원하지 않는 제어입니다.')
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid or '-','system','control',action,time.time()))
 
-    def deliver(self, tid, sender, recipient, content,require_running=False,handoff=None,request_key=None):
+    def deliver(self, tid, sender, recipient, content,require_running=False,handoff=None,request_key=None,*,_connection=None):
         fingerprint=''
         if request_key is not None:
             if not isinstance(request_key,str) or not __import__('re').fullmatch(r'[A-Za-z0-9_-]{8,80}',request_key):raise ValueError('메시지 요청 ID 오류')
             fingerprint=hashlib.sha256(json.dumps([tid,sender,recipient,content,handoff],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-        with self.connect() as c:
-            c.execute('BEGIN IMMEDIATE')
+        with self._write_transaction(_connection) as c:
             if request_key is not None:
                 previous=c.execute('SELECT fingerprint FROM message_requests WHERE request_key=?',(request_key,)).fetchone()
                 if previous:

@@ -181,19 +181,10 @@ class SlackService:
             if prior:
                 c.execute('INSERT OR IGNORE INTO slack_threads VALUES(?,?,?,?)',(prior['id'],channel,thread,connection['id']))
                 return prior['id']
+        if text in ('중지','일시중지','pause','계속','resume','상태','status','취소','cancel'):
+            return self._control_event(source,channel,thread,text)
         with self.store.connect() as c:
             existing=c.execute('SELECT t.id,t.status FROM slack_threads s JOIN tasks t ON t.id=s.task_id WHERE s.channel=? AND s.thread_ts=? ORDER BY t.created DESC LIMIT 1',(channel,thread)).fetchone()
-        if text in ('중지','일시중지','pause','계속','resume'):
-            action='pause' if text in ('중지','일시중지','pause') else 'resume'
-            self.store.control(action)
-            if existing:self.store.deliver(existing['id'],'system','user',{'summary':'작업 관리자 '+('일시 중지' if action=='pause' else '재개')})
-            return existing['id'] if existing else None
-        if existing and text in ('상태','status','취소','cancel'):
-            status=existing['status']
-            if text in ('취소','cancel') and status in ('queued','running','failed','interrupted'):
-                self.store.control('cancel',existing['id']);status='cancelled'
-            self.store.deliver(existing['id'],'system','user',{'summary':'현재 작업 상태: '+status})
-            return existing['id']
         if existing and existing['status'] in ('queued','running'):
             recipient=connection['agent_id'] if connection['agent_id']!='shared' else 'developer'
             self.store.message(existing['id'],recipient,text,request_key=instruction_key)
@@ -204,6 +195,26 @@ class SlackService:
             slack_context={'channel':channel,'thread_ts':thread,'connection_id':connection['id'],'agent_id':connection['agent_id']})
         self.store.deliver(tid,'system','user',{'summary':'작업을 접수했습니다. 작업 ID: '+tid})
         return tid
+
+    def _control_event(self,source,channel,thread,text):
+        # Serialize the current task state, control effect, response and receipt.
+        # A failed receipt rolls back everything; another receiver sees the receipt.
+        with self.store._write_transaction() as c:
+            if c.execute('SELECT 1 FROM slack_events WHERE id=?',(source,)).fetchone():return None
+            existing=c.execute('SELECT t.id,t.status FROM slack_threads s JOIN tasks t ON t.id=s.task_id WHERE s.channel=? AND s.thread_ts=? ORDER BY t.created DESC LIMIT 1',(channel,thread)).fetchone()
+            tid=existing['id'] if existing else None
+            if text in ('중지','일시중지','pause','계속','resume'):
+                action='pause' if text in ('중지','일시중지','pause') else 'resume'
+                self.store.control(action,_connection=c)
+                summary='작업 관리자 '+('일시 중지' if action=='pause' else '재개')
+            elif existing:
+                status=existing['status']
+                if text in ('취소','cancel') and status in ('queued','running','failed','interrupted'):
+                    self.store.control('cancel',tid,_connection=c);status='cancelled'
+                summary='현재 작업 상태: '+status
+            if existing:self.store.deliver(tid,'system','user',{'summary':summary},_connection=c)
+            c.execute('INSERT INTO slack_events VALUES(?,?)',(source,time.time()))
+            return tid
 
     def flush(self):
         if not self.config.get('notify'):return
