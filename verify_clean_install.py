@@ -18,12 +18,27 @@ def copy_sources(destination):
     shutil.copytree(ROOT/'docs',destination/'docs')
 
 
+def run_units(project,timeout=240):
+    with tempfile.TemporaryFile() as log:
+        timed_out=False
+        try:
+            result=subprocess.run([sys.executable,'-m','unittest','-v'],cwd=project,stdout=log,stderr=subprocess.STDOUT,timeout=timeout,env=dict(os.environ,PYTHONIOENCODING='utf-8'))
+            code=result.returncode
+        except subprocess.TimeoutExpired:
+            timed_out=True;code=124
+        log.seek(0,os.SEEK_END);log.seek(max(0,log.tell()-8192))
+        tail=log.read(8192).decode('utf-8',errors='replace')
+        if timed_out:print(f'단위 검증이 {timeout}초 제한에 도달했습니다. 마지막 검사 기록:')
+        print(tail if code else '\n'.join(tail.splitlines()[-4:]))
+        return code
+
+
 def main(ui=False):
     with tempfile.TemporaryDirectory(prefix='clean-',dir=ROOT) as temporary:
         project=Path(temporary)/'source';copy_sources(project)
         assert not any((project/name).exists() for name in ('data','data-demo','models','runtime'))
-        result=subprocess.run([sys.executable,'-m','unittest','-q'],cwd=project,timeout=240)
-        if result.returncode:return result.returncode
+        code=run_units(project)
+        if code:return code
         result=subprocess.run([sys.executable,'verify_system.py'],cwd=project,timeout=90)
         if result.returncode:return result.returncode
         if ui:
