@@ -504,13 +504,19 @@ class Worker:
                     with s.connect() as c:c.execute('UPDATE tasks SET required_files=? WHERE id=?',(task['required_files'],tid))
                 if role == 'reviewer' and (result.get('passed') is not True or task['verification'].get('passed') is not True):
                     feedback={'summary':result['summary'],'verification':task['verification'],'request':'실패 조건을 수정하고 다시 제출하세요.','capability':role}
-                    if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result):return True
                     if task['revision']<task['max_revisions']:
-                        with s.connect() as c:
+                        with s._write_transaction() as c:
+                            if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result,_connection=c):return True
                             c.execute("UPDATE tasks SET status='queued',stage=?,revision=revision+1,error='검증 실패: 자동 수정 대기' WHERE id=? AND status='running'",(pipeline.index('developer'),tid))
                         return True
+                    if not s.deliver(tid,actor,assignment['developer'],feedback,require_running=True,handoff=result):return True
                     raise RuntimeError('검증 실패: 최대 수정 회차에 도달했습니다.')
                 recipient=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
+                if stage<len(pipeline)-1:
+                    with s._write_transaction() as c:
+                        if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
+                        c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'",(stage+1,tid))
+                    continue
                 if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result):return True
                 if stage==len(pipeline)-1:
                     if task['verification'].get('source_hashes')!=self.file_hashes(files):
@@ -522,8 +528,6 @@ class Worker:
                         self.package(tid,'completed',task.get('verification'))
                         c.execute("UPDATE tasks SET stage=?,status='completed',error='' WHERE id=?",(len(pipeline),tid))
                     return True
-                with s.connect() as c:
-                    c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'", (stage+1,tid))
             return True
         except StageDeferred:return True
         except VMAdmissionBusy:

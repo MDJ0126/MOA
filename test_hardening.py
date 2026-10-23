@@ -64,7 +64,7 @@ class HardeningTests(unittest.TestCase):
     def test_cancellation_immediately_before_delivery_is_atomic(self):
         tid=self.store.add('cancel race','demo');original=self.store.deliver
         def cancel_before_delivery(task,sender,recipient,content,**kwargs):
-            if sender=='developer':self.store.control('cancel',tid)
+            if sender=='developer':self.store.control('cancel',tid,_connection=kwargs.get('_connection'))
             return original(task,sender,recipient,content,**kwargs)
         with patch.object(self.store,'deliver',cancel_before_delivery):Worker(self.store).tick()
         state=self.store.snapshot();self.assertEqual(state['tasks'][0]['status'],'cancelled')
