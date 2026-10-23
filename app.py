@@ -56,6 +56,8 @@ def checked_plan(task):
     if not isinstance(environment,dict) or environment.get('kind','local') not in ('local','vm'):raise ValueError('실행 환경 오류')
     validate_actions(environment.get('actions',[]),pipeline)
     if environment.get('kind')=='vm' and not isinstance(environment.get('config'),dict):raise ValueError('VM 설정 오류')
+    if environment.get('selection')=='profile' and 'execution_contract' not in environment:raise ValueError('저장 환경의 실행 계약이 없습니다.')
+    if 'execution_contract' in environment:environment_profiles.check_contract(environment['execution_contract'],environment.get('kind','local'))
     return plan
 
 
@@ -108,7 +110,7 @@ class Store:
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',
                       (tid, agent, kind, content, time.time(),recipient,capability))
 
-    def add(self, title, mode, acceptance='', max_revisions=2, auto_recover=True, required_files=None,source_key=None,slack_context=None,environment='local',vm_actions=None,request_key=None):
+    def add(self, title, mode, acceptance='', max_revisions=2, auto_recover=True, required_files=None,source_key=None,slack_context=None,environment='local',vm_actions=None,request_key=None,expected_profile_updated=None):
         if not isinstance(title,str):raise ValueError('작업 내용은 문자열이어야 합니다.')
         title = title.strip()
         fingerprint=''
@@ -116,7 +118,9 @@ class Store:
             if not isinstance(request_key,str) or not __import__('re').fullmatch(r'[A-Za-z0-9_-]{8,80}',request_key):raise ValueError('작업 요청 ID 오류')
             if source_key:raise ValueError('요청 ID 중복 설정')
             source_key='ui:'+request_key
-            fingerprint=hashlib.sha256(json.dumps([title,mode,acceptance,max_revisions,auto_recover,required_files or [],environment,vm_actions or []],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+            fingerprint_fields=[title,mode,acceptance,max_revisions,auto_recover,required_files or [],environment,vm_actions or []]
+            if environment=='profile' and expected_profile_updated is not None:fingerprint_fields.append(expected_profile_updated)
+            fingerprint=hashlib.sha256(json.dumps(fingerprint_fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
             with self.connect() as c:existing=c.execute('SELECT id,request_fingerprint FROM tasks WHERE source_key=?',(source_key,)).fetchone()
             if existing:
                 if existing['request_fingerprint']!=fingerprint:raise ValueError('같은 요청 ID에 다른 작업 내용이 전달되었습니다.')
@@ -125,11 +129,18 @@ class Store:
             raise ValueError('작업 내용 또는 실행 모드가 올바르지 않습니다.')
         tid = uuid.uuid4().hex[:12]
         plan=make_plan(self,tid)
-        if environment not in ('local','vm'):raise ValueError('작업 환경은 local 또는 vm입니다.')
+        contract=None
+        if environment=='profile':
+            selected_profile=environment_profiles.settings(self)
+            if expected_profile_updated is not None and expected_profile_updated!=selected_profile.get('updated',0):raise SettingsConflict('작업 환경 설정이 변경되었습니다. 최신 설정을 확인한 뒤 다시 맡기세요.')
+            contract=environment_profiles.resolve(selected_profile)
+        if environment=='profile':environment='local'
+        if environment not in ('local','vm'):raise ValueError('작업 환경은 local·vm·profile 중 선택하세요.')
         actions=validate_actions(vm_actions or [],plan['pipeline'])
         if environment=='local' and actions:raise ValueError('VM 화면 동작을 사용하려면 공유 VM 환경을 선택하세요.')
         if environment=='vm' and not vm_settings(self)['enabled']:raise ValueError('설정에서 공유 VM을 먼저 준비하세요.')
         plan['environment']={'kind':environment,'actions':actions,'config':vm_settings(self) if environment=='vm' else None}
+        if contract is not None:plan['environment'].update(selection='profile',execution_contract=contract)
         if slack_context:
             target=next((a for a in plan['agents'] if a['id']==slack_context['agent_id']),None)
             if target:
@@ -181,6 +192,7 @@ class Store:
                 if not task or task['status'] not in ('failed','interrupted'):
                     raise ValueError('실패 또는 중단된 작업만 재개할 수 있습니다.')
                 try:plan=checked_plan(task)
+                except environment_profiles.UnavailableEnvironment:raise
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError):raise ValueError('저장된 실행 계획·단계를 확인하지 못했습니다. 원래 요청을 확인해 새 작업으로 등록하세요.') from None
                 stage=task['stage']
                 if task['status']=='failed':stage=min(stage,plan['pipeline'].index('developer'))
@@ -311,7 +323,7 @@ Return one JSON object: {{"tool":"list|read|write","path":"...","content":"..."}
 or {{"summary":"...","passed":true|false}} to finish. Reviewer must provide passed.
 Use tools to inspect evidence before approving. Changes stay in the task workspace.'''
         system+='\nAssigned agent: '+json.dumps(task.get('agent',{}),ensure_ascii=False)
-        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps({'task':task['title'], 'handoffs':relevant_history(history,role,task.get('agent',{}).get('id')), 'verification':task.get('verification')}, ensure_ascii=False)}]
+        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps({'task':task['title'], 'handoffs':relevant_history(history,role,task.get('agent',{}).get('id')), 'verification':task.get('verification'),'execution_environment':task.get('execution_environment')}, ensure_ascii=False)}]
         read_evidence = False
         for _ in range(12):
             body = json.dumps({'model':self.model, 'messages':messages, 'stream':False,
@@ -355,8 +367,8 @@ class Worker:
                     role=pipeline[row['stage']]
                     blocked=has_vm_input(frozen,role)
                     if blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
-                except (ValueError,TypeError,KeyError,IndexError,AttributeError):
-                    blocked=True;error='저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
+                except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
+                    blocked=True;error=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
                 retry=not blocked and row['auto_recover'] and row['failures']<3
                 c.execute('UPDATE tasks SET status=?,failures=failures+?,error=? WHERE id=?',('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
 
@@ -417,8 +429,8 @@ class Worker:
                 if blocked:
                     c.execute("UPDATE tasks SET status='interrupted',error='데모 전용 실행에서 실제 AI·VM 작업을 보류했습니다.' WHERE id=? AND status='queued'",(task['id'],));return True
             try:plan=checked_plan(task)
-            except (ValueError,TypeError,KeyError,IndexError,AttributeError):
-                message='저장된 실행 계획·단계를 확인하지 못해 작업을 보류했습니다.'
+            except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
+                message=str(exc) if isinstance(exc,environment_profiles.UnavailableEnvironment) else '저장된 실행 계획·단계를 확인하지 못해 작업을 보류했습니다.'
                 c.execute('BEGIN IMMEDIATE')
                 if c.execute("UPDATE tasks SET status='interrupted',error=? WHERE id=? AND status='queued'",(message,task['id'])).rowcount:
                     c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(task['id'],'system','error',message,time.time()))
@@ -442,6 +454,7 @@ class Worker:
                     history = [dict(r) for r in c.execute("SELECT agent,content,recipient,capability FROM messages WHERE task_id=? AND kind='handoff' ORDER BY seq", (tid,))]
                 role = pipeline[stage];actor=assignment[role]
                 task['agent']=next(a for a in plan['agents'] if a['id']==actor)
+                task['execution_environment']=plan.get('environment',{'kind':'local'})
                 self.checkpoint(tid,stage,task['revision'],files)
                 if role=='reviewer':
                     verification=run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0}
@@ -450,6 +463,8 @@ class Worker:
                     verification['passed']=verification['passed'] and not missing
                     verification['source_hashes']=self.file_hashes(files)
                     if plan.get('environment',{}).get('kind')=='vm':verification['vm']={'input_scope':'QMP guest input and screenshots','visual_goal_verified':False,'file_checks_location':'host'}
+                    contract=plan.get('environment',{}).get('execution_contract')
+                    if contract is not None:verification['execution_target']={'target_os':contract['target_os'],'runner':'host','architecture':contract['architecture'],'execution_tests_performed':task['mode']!='demo' and bool(verification.get('tests_run')),'scope':'Python checks only; engine and GUI not verified'}
                     task['verification']=verification
                     s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False),capability=role)
                     with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(verification,ensure_ascii=False),tid))
@@ -740,7 +755,7 @@ def serve(root, port, model, url,demo_only=False):
                 if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
                 if self.path == '/api/tasks':
                     if demo_only and (data.get('mode',default_mode)!='demo' or data.get('environment','local')!='local'):raise ValueError('데모 전용 실행은 로컬 데모 작업만 접수합니다.')
-                    self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'))})
+                    self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'),expected_profile_updated=data.get('expected_profile_updated'))})
                 elif self.path=='/api/backups/create':
                     key=data.get('request_key') or uuid.uuid4().hex
                     with maintenance_lock:

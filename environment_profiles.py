@@ -1,10 +1,32 @@
 """Host-aware execution preferences. Saving a preference never provisions a VM."""
 import math
+import platform
 from setup_config import hardware,read_setting,checked_write_setting
 
 DEFAULT={'target_os':'auto','location':'shared_vm','budget_percent':50}
 TARGETS=('auto','windows','linux','macos')
 LOCATIONS=('host','shared_vm','remote')
+
+class UnavailableEnvironment(ValueError):pass
+
+def identity():
+    return {'os':{'Windows':'windows','Linux':'linux','Darwin':'macos'}.get(platform.system()),'architecture':platform.machine()}
+
+def resolve(value,current=None):
+    requested=validate(value);current=identity() if current is None else current
+    target=current['os'] if requested['target_os']=='auto' else requested['target_os']
+    if requested['location']!='host':
+        raise UnavailableEnvironment('선택한 VM·원격 실행 환경은 아직 연결되지 않았습니다. 환경 설정에서 현재 PC를 선택하거나 연결 구현 후 다시 요청하세요.')
+    if target is None or target!=current['os']:
+        raise UnavailableEnvironment('개발 대상 OS와 현재 PC가 다릅니다. 해당 OS의 실행 환경을 연결해야 하며 다른 OS에서 대신 검증하지 않습니다.')
+    return {'version':1,'requested':requested,'target_os':target,'runner':'host','architecture':current['architecture']}
+
+def check_contract(value,kind,current=None):
+    if not isinstance(value,dict) or type(value.get('version')) is not int or value['version']!=1:raise ValueError('실행 환경 계약 형식 오류')
+    if kind!='local':raise ValueError('호스트 실행 계약과 작업 환경이 다릅니다.')
+    expected=resolve(value.get('requested'),current)
+    if value!=expected:raise UnavailableEnvironment('접수된 OS·아키텍처와 현재 실행 환경이 달라 작업을 보류했습니다. 원래 환경에서 재개하거나 새 작업을 등록하세요.')
+    return expected
 
 def settings(store):
     return read_setting(store,'execution_profile',DEFAULT)
@@ -44,7 +66,7 @@ def recommend(value,host=None):
     if target=='macos':note+=' macOS 실행은 Mac 장비 연결을 기준으로 준비하세요.'
     return {'host':host,'target_os':target,'location':location,'presets':presets,'recommended':selected,
             'memory_budget_mb':memory,'cpu_budget':cpu,'note':note,'connected':False,
-            'runtime_note':'선호 환경 설정입니다. 현재 작업 실행은 기존 호스트/QEMU 경로를 사용하며 VirtualBox·원격 연결은 아직 미구현입니다.'}
+            'runtime_note':'새 작업에서 저장한 실행 환경을 선택하면 현재 PC와 대상 OS를 확인해 실행합니다. VM·원격 연결은 아직 미구현이며 미연결 대상을 대신 실행하지 않습니다.'}
 
 def validate(value):
     if not isinstance(value,dict):raise ValueError('실행 환경 설정 객체가 필요합니다.')

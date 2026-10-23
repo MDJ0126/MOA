@@ -145,7 +145,7 @@ async function main(){
  assert.equal(d.querySelector('#vmMemory').value,'2048');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#settingsConflict').hidden,'VM reviewed conflict save');
  assert.equal((await(await fetch(base+'/api/vm')).json()).config.memory_mb,2048);
- assert.equal(d.querySelector('#taskEnvironment').options.length,2);
+ assert.deepEqual([...d.querySelector('#taskEnvironment').options].map(option=>option.value),['local','profile','vm']);
  d.querySelector('#maintenanceOptions').open=true;click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
  await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');
  click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');

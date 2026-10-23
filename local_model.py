@@ -44,6 +44,7 @@ class Llama:
             evidence.append({'path':str(p.relative_to(files.folder)),'content':files.execute({'tool':'read','path':str(p.relative_to(files.folder))},False)[:6000]})
         purpose='UNIT TESTS ONLY: begin with import unittest and import the tested function from the implementation module. Define a unittest.TestCase with real test methods.' if is_test else f'IMPLEMENTATION ONLY in {language}: implement the requested behavior. Do NOT put Python unittest code in this implementation file.'
         specification=task['title']
+        if task.get('execution_environment'):specification+='\nExecution environment (only provided verification is evidence): '+json.dumps(task['execution_environment'],ensure_ascii=False)
         reference=task.get('acceptance','') if is_test else ''
         prompt=f'User specification:\n{specification}\n\nFixed acceptance examples (read-only reference):\n{reference}\n'
         prompt+='\nAssigned agent preferences:\n'+task.get('agent',{}).get('instructions','')
@@ -111,7 +112,7 @@ Reporter: summarize actual results and limitations. No engine or Slack is connec
 All file paths must stay relative to the assigned workspace. Prior failures must be fixed.'''
         system+='\nAssigned agent: '+json.dumps(task.get('agent',{}),ensure_ascii=False)
         compact=relevant_history(history,role,task.get('agent',{}).get('id'))
-        context={'task':task['title'][:6000], 'required_files':task.get('required_files'), 'handoffs':compact, 'actual_files':inventory,
+        context={'execution_environment':task.get('execution_environment'),'task':task['title'][:6000], 'required_files':task.get('required_files'), 'handoffs':compact, 'actual_files':inventory,
                  'verification':task.get('verification'), 'revision':task.get('revision',0)}
         payload={'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(context,ensure_ascii=False)}],
                  'temperature':0.1,'max_tokens':2200 if role=='developer' else 700,'response_format':{'type':'json_schema','json_schema':{'name':role,'strict':True,'schema':schema}}}

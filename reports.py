@@ -32,6 +32,9 @@ def markdown(report):
     lines=['# 작업 결과',f'**상태:** {STATES.get(report["status"],text(report["status"]))} · **작업:** {text(report["task_id"])}',
            '## 요청',text(report['title']),'## 검증',verdict]
     if verification.get('scope'):lines.append('검사 범위: '+text(verification['scope']))
+    contract=report.get('execution_environment',{}).get('execution_contract')
+    if contract:
+        lines.extend(['## 실행 대상',text(contract['target_os'])+' · '+text(contract['architecture'])+' · 현재 PC', 'Python 검사 범위입니다. 데모는 실행 테스트가 없으며 엔진·화면 동작은 이 결과로 검증하지 않습니다.'])
     if count is not None:lines.append(f'실행 테스트 수: {count}개')
     lines.extend(['## 담당 흐름',' → '.join(text(names.get(plan['assignment'][role],plan['assignment'][role]))+' · '+LABELS.get(role,role) for role in plan['pipeline']),
                   f'수정 회차: {report["revision"]}','## 담당자별 결과'])
