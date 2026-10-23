@@ -7,6 +7,7 @@ import secrets
 import subprocess
 import sys
 import socket
+import stat
 import time
 from app_lifecycle import request_stop
 
@@ -24,15 +25,30 @@ def write_status(path,status):
     return False
 
 def acquire(path):
-    lock=open(path,'a+b')
+    path=Path(path)
+    def valid(info):return stat.S_ISREG(info.st_mode) and info.st_nlink==1 and not getattr(info,'st_file_attributes',0)&0x400
+    try:original=path.lstat()
+    except FileNotFoundError:original=None
+    if original is not None and not valid(original):raise OSError('잠금은 링크가 아닌 일반 파일이어야 합니다.')
+    fd=os.open(path,os.O_RDWR|os.O_CREAT|getattr(os,'O_BINARY',0)|getattr(os,'O_NOFOLLOW',0),0o600)
     try:
-        lock.seek(0);lock.write(b'0');lock.flush();lock.seek(0)
+        opened=os.fstat(fd);current=path.lstat()
+        identity=lambda info:(info.st_dev,info.st_ino)
+        if not valid(opened) or not valid(current) or identity(opened)!=identity(current) or original is not None and identity(original)!=identity(opened):
+            raise OSError('잠금 파일이 열기 중 변경되었습니다.')
+        lock=os.fdopen(fd,'r+b',buffering=0)
+    except BaseException:
+        os.close(fd);raise
+    try:
+        lock.seek(0)
         if os.name=='nt':
             import msvcrt
             msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
         else:
             import fcntl
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        if os.fstat(lock.fileno()).st_size==0:
+            lock.write(b'0');lock.flush();lock.seek(0)
     except BaseException:
         lock.close()
         raise
