@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -109,6 +109,23 @@ async function main(){
  w.location.hash='work';await until(()=>!d.querySelector('#page-work').hidden&&d.querySelectorAll('#allTasks [data-task]').length===1,'server task list');
  input('#taskSearch','없는 제목');await until(()=>d.querySelector('#workCount').textContent==='0개 작업','server search empty');
  input('#taskSearch','DOM 시험');await until(()=>d.querySelector('#workCount').textContent==='1개 작업','server search found');
+ {
+ const beforeSearchFetch=w.fetch,searchInput=d.querySelector('#taskSearch'),originalSearch=searchInput.value;
+ const latest=await(await fetch(base+'/api/tasks?page=0&status=all&q='+encodeURIComponent(originalSearch))).json();
+ for(const failOld of [false,true]){
+  let releaseOld,rejectOld,calls=0;
+  w.fetch=(path,options)=>{if(path.startsWith('/api/tasks?')){if(calls++===0)return new Promise((resolve,reject)=>{releaseOld=resolve;rejectOld=reject});return Promise.resolve(new Response(JSON.stringify(latest)))}return beforeSearchFetch(path,options)};
+  searchInput.value='older search';const old=w.testLoadTasks();await until(()=>releaseOld,'older task search pending');
+  searchInput.value=originalSearch;await w.testLoadTasks();assert.equal(d.querySelector('#workCount').textContent,'1개 작업');
+  if(failOld)rejectOld(Error('OLD_SEARCH_FAILURE'));else releaseOld(new Response(JSON.stringify({tasks:[],total:0,has_more:false})));
+  await assert.doesNotReject(old,'obsolete search failures must not report a current failure');
+  assert.equal(d.querySelector('#workCount').textContent,'1개 작업');
+  assert.equal(d.querySelectorAll('#allTasks [data-task]').length,1);
+ }
+ w.fetch=(path,options)=>path.startsWith('/api/tasks?')?Promise.resolve(new Response(JSON.stringify({error:'LATEST_SEARCH_FAILURE'}),{status:503})):beforeSearchFetch(path,options);
+ await assert.rejects(w.testLoadTasks(),/LATEST_SEARCH_FAILURE/,'latest search failures must remain visible');
+ w.fetch=beforeSearchFetch;searchInput.value=originalSearch;
+ }
  assert.ok(d.querySelector('.sidebar [data-page="work"]').getAttribute('aria-label'));
  w.location.hash='settings/slack';await until(()=>!d.querySelector('#panel-slack').hidden,'slack tab');
  d.querySelector('#tab-slack').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await until(()=>!d.querySelector('#panel-team').hidden,'keyboard tab navigation');
