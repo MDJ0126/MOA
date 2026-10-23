@@ -14,7 +14,7 @@ async function main(){
  const input=(selector,value,event='input')=>{const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))};
  const click=selector=>{assert.ok(d.querySelector(selector),selector);d.querySelector(selector).click()};
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error('Draft timeout: '+label+' / '+d.querySelector('#toast').textContent)}
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;window.draftBreakPlan=()=>{const t=state.tasks.find(t=>t.id===activeTask)||workTasks.find(t=>t.id===activeTask);t.execution_plan='{broken';t.execution_plan_unavailable=true;renderModal()};window.draftRestore=refresh;window.draftDemo=()=>{state.demo_only=true;renderHome()};boot();`));
+ w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;window.draftOlder=loadOlderLogs;window.draftBreakPlan=()=>{const t=state.tasks.find(t=>t.id===activeTask)||workTasks.find(t=>t.id===activeTask);t.execution_plan='{broken';t.execution_plan_unavailable=true;renderModal()};window.draftRestore=refresh;window.draftDemo=()=>{state.demo_only=true;renderHome()};boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length===2,'boot');
   await w.draftOpen(a);input('#messageText','A 작성 중');input('#messageRecipient','checker','change');click('[data-action="close-modal"]');
@@ -22,6 +22,25 @@ async function main(){
   await w.draftOpen(a);assert.equal(d.querySelector('#messageText').value,'A 작성 중');assert.equal(d.querySelector('#messageRecipient').value,'checker');
   const unload=new w.Event('beforeunload',{cancelable:true});w.dispatchEvent(unload);assert.equal(unload.defaultPrevented,true);
   const original=w.fetch;
+  {
+   let releaseOlder;
+   w.fetch=async(path,options)=>{
+    const url=new URL(path,base);
+    if(url.pathname==='/api/logs'&&url.searchParams.get('task')===a){
+     if(url.searchParams.has('before'))return new Promise(resolve=>{releaseOlder=resolve});
+     const response=await original(path,options),data=await response.json();return new Response(JSON.stringify({...data,next_cursor:999999}));
+    }
+    return original(path,options);
+   };
+   await w.draftOpen(a);const pending=w.draftOlder();await until(()=>releaseOlder,'older page pending');
+   click('[data-action="close-modal"]');await w.draftOpen(a);
+   assert.equal(d.querySelector('#olderLogs').hidden,false);
+   releaseOlder(new Response(JSON.stringify({messages:[{seq:-1,task_id:a,agent:'user',kind:'instruction',content:'STALE_OLDER_PAGE',created:Date.now()/1000,recipient:''}],next_cursor:null})));
+   await pending;
+   assert.ok(!d.querySelector('#modalLogs').textContent.includes('STALE_OLDER_PAGE'),'older page from a closed view must not enter a reopened task');
+   assert.equal(d.querySelector('#olderLogs').hidden,false,'obsolete page must not replace the reopened cursor');
+   w.fetch=original;
+  }
   function hold(path){let release,arrived=false;const gate=new Promise(resolve=>release=resolve);w.fetch=async(url,options)=>{const response=await original(url,options);if(url===path){arrived=true;await gate}return response};return {release,ready:()=>arrived}}
   let delayed=hold('/api/messages');click('[data-action="send-message"]');await until(delayed.ready,'message held');click('[data-action="close-modal"]');await w.draftOpen(b);assert.equal(d.querySelector('#messageText').value,'B 작성 중');delayed.release();await until(()=>!d.querySelector('[data-action="send-message"]').disabled,'message ack');
   assert.equal(d.querySelector('#messageText').value,'B 작성 중');assert.equal(d.querySelector('#messageReceipt').hidden,true);w.fetch=original;await w.draftOpen(a);assert.equal(d.querySelector('#messageText').value,'');
