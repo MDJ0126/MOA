@@ -69,7 +69,9 @@ def workspace_files(workspace):
         if '__pycache__' in path.parts:continue
         if path.is_symlink() or getattr(path,'is_junction',lambda:False)() or not path.resolve().is_relative_to(workspace):
             raise ValueError('결과물에는 작업 폴더 밖 경로 또는 링크를 포함할 수 없습니다.')
-        if path.is_file():result.append(path)
+        if path.is_file():
+            if path.stat(follow_symlinks=False).st_nlink!=1:raise ValueError('결과물에 하드링크를 포함할 수 없습니다.')
+            result.append(path)
     return result
 
 

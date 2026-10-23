@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 from socket import socket
 import uuid
+import hashlib
+import os
 from app import Store
 from data_backup import backup
 
@@ -75,6 +77,27 @@ with tempfile.TemporaryDirectory(dir=root) as folder:
         for tid in ids:
             report=json.loads((Path(folder)/'tasks'/tid/'report.json').read_text(encoding='utf-8'))
             assert report['files'][0]['path']=='demo-result.md'
+        artifact_url='/api/artifact?task='+ids[0]+'&file=report.md'
+        report_path=Path(folder)/'tasks'/ids[0]/'report.md';original_report=report_path.read_bytes()
+        payload=b'large-report-line\n'*150000;report_path.write_bytes(payload)
+        try:
+            req=urllib.request.Request(f'http://127.0.0.1:{port}'+artifact_url,method='HEAD')
+            with urllib.request.urlopen(req,timeout=3) as response:
+                assert int(response.headers['Content-Length'])==len(payload) and response.read()==b''
+                assert response.headers['X-Content-Type-Options']=='nosniff'
+                assert 'moa-'+ids[0] in response.headers['Content-Disposition']
+            assert hashlib.sha256(request(artifact_url)).digest()==hashlib.sha256(payload).digest()
+            assert any(f['name']=='report.md' for f in request('/api/artifacts?task='+ids[0])['files'])
+            secret=Path(folder)/'private-test.txt';secret.write_text('PRIVATE_TEST_MARKER');report_path.unlink();os.link(secret,report_path)
+            try:
+                request(artifact_url);raise AssertionError('hardlink artifact served')
+            except urllib.error.HTTPError as error:assert error.code==404 and b'PRIVATE_TEST_MARKER' not in error.read()
+            assert 'report.md' not in {f['name'] for f in request('/api/artifacts?task='+ids[0])['files']}
+        finally:
+            report_path.unlink(missing_ok=True);report_path.write_bytes(original_report)
+        req=urllib.request.Request(f'http://127.0.0.1:{port}/api/vm/screen',method='HEAD')
+        try:urllib.request.urlopen(req);raise AssertionError('unsafe HEAD route allowed')
+        except urllib.error.HTTPError as error:assert error.code==405
         export=request('/api/logs/export?task='+ids[0]);assert export['count']>0
         assert len(export['messages'])==export['count'] and all(m['task_id']==ids[0] for m in export['messages'])
         filtered=request('/api/logs/export?task='+ids[0]+'&agent=planner')

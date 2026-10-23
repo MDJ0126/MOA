@@ -48,7 +48,7 @@ async function main(){
  await until(()=>d.querySelector('#modalMeta').textContent.includes('완료'),'actual demo completed');
  assert.ok(d.querySelector('#modalTitle').textContent.includes('<script>'));
  assert.equal(d.querySelectorAll('#modalTitle script').length,0);
- assert.ok(d.querySelector('a[href*="artifacts.zip"]'));
+ await until(()=>d.querySelector('a[href*="artifacts.zip"]'),'available artifact links');
  const state=await(await fetch(base+'/api/state')).json();assert.equal(state.tasks[0].stage,2);
  assert.ok(state.messages.some(m=>m.agent==='maker'&&m.kind==='start'));
  click('[data-action="technical"]');assert.ok(d.querySelectorAll('.bubble-body.technical').length>0);
@@ -64,6 +64,13 @@ async function main(){
  await w.testRefresh();assert.ok(d.querySelector('#modalLogs').textContent.includes('자동 재시도 대기'));
  retryState.paused=true;await w.testRefresh();assert.ok(d.querySelector('#modalLogs').textContent.includes('일시 중지 해제 후'));
  w.fetch=retryFetch;await w.testRefresh();
+ const artifactFetch=w.fetch;
+ w.fetch=async(path,options)=>path.startsWith('/api/artifacts?')?new Response(JSON.stringify({task_id:state.tasks[0].id,files:[]}),{headers:{'Content-Type':'application/json'}}):artifactFetch(path,options);
+ await w.testRefresh();assert.equal(d.querySelector('a[href*="file=artifacts.zip"]'),null);
+ assert.ok(d.querySelector('#modalActions').textContent.includes('결과 파일이 없습니다'));
+ w.fetch=async(path,options)=>path.startsWith('/api/artifacts?')?new Response(JSON.stringify({error:'결과 파일 조회 실패'}),{status:503,headers:{'Content-Type':'application/json'}}):artifactFetch(path,options);
+ await w.testRefresh();assert.ok(d.querySelector('[data-action="refresh-artifacts"]'));
+ w.fetch=artifactFetch;click('[data-action="refresh-artifacts"]');await until(()=>d.querySelector('a[href*="file=artifacts.zip"]'),'artifact lookup retry');
  click('[data-action="export-logs"]');await until(()=>d.querySelector('#toast').textContent.includes('내보냈습니다'),'conversation export');assert.ok(exported);
  const taskRequests=requests.filter(r=>r.path==='/api/tasks');assert.equal(taskRequests.length,2);assert.equal(taskRequests[0].body.request_key,taskRequests[1].body.request_key);
  click('[data-action="close-modal"]');

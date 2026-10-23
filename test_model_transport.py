@@ -75,6 +75,19 @@ class ModelTransportTests(unittest.TestCase):
         detail=next(json.loads(m['content']) for m in store.snapshot()['messages'] if m['kind']=='model_error')
         self.assertEqual(detail['automatic_retry_blocked'],'vm_input');self.assertFalse(detail['will_retry'])
 
+    def test_crashed_vm_input_stage_waits_for_manual_confirmation(self):
+        store=Store(self.temp.name);save_team(store,PRESETS[0]);write_setting(store,'vm',dict(DEFAULT,enabled=True))
+        tid=store.add('crash recovery','demo',environment='vm',vm_actions=[{'role':'developer','action':'text','text':'example'}])
+        with store.connect() as c:c.execute("UPDATE tasks SET status='running' WHERE id=?",(tid,))
+        Worker(store).recover();task=store.snapshot()['tasks'][0]
+        self.assertEqual((task['status'],task['failures']),('interrupted',0));self.assertIn('자동 복구를 보류',task['error'])
+        Worker(store).recover();self.assertEqual(store.snapshot()['tasks'][0]['status'],'interrupted')
+
+    def test_invalid_stored_plan_does_not_enter_recovery_loop(self):
+        store=self.store()
+        with store.connect() as c:c.execute("UPDATE tasks SET status='running',execution_plan='invalid json'")
+        Worker(store).recover();self.assertEqual(store.snapshot()['tasks'][0]['status'],'interrupted')
+
     def test_cancel_after_error_update_cannot_publish_failed_report(self):
         store=self.store();log=store.log
         def cancel(tid,agent,kind,content,*args,**kwargs):

@@ -22,6 +22,7 @@ from local_model import Llama,relevant_history
 from conversation import for_agent,enrich,task_messages
 from reports import publish,workspace_files
 from model_transport import request_json,ollama_text,model_output,ModelError,RETRY_STATUSES,validate_url
+from artifacts import open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
 from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
 from vm_runtime import VM,BusyVM,settings as vm_settings,validate_actions
@@ -31,6 +32,11 @@ SOURCE_HASH=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 ROLES = ('planner', 'developer', 'reviewer', 'reporter')
 LABELS = dict(zip(ROLES, ('계획', '개발', '검증', '보고')))
 CONFIG=json.loads((ROOT/'config.json').read_text(encoding='utf-8')) if (ROOT/'config.json').exists() else {}
+
+
+def has_vm_input(plan,role):
+    env=plan.get('environment',{})
+    return env.get('kind')=='vm' and any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[]))
 
 
 class Store:
@@ -310,8 +316,21 @@ class Worker:
 
     def recover(self):
         with self.store.connect() as c:
-            c.execute("UPDATE tasks SET status='interrupted',error='이전 실행 중 종료됨. 파일과 기록 확인 후 재개하세요.' WHERE status='running'")
-            c.execute("UPDATE tasks SET status='queued',failures=failures+1,error='체크포인트에서 자동 복구' WHERE status='interrupted' AND auto_recover=1 AND failures<3")
+            c.execute('BEGIN IMMEDIATE')
+            for row in c.execute("SELECT * FROM tasks WHERE status IN ('running','interrupted')").fetchall():
+                error='이전 실행 중 종료됨. 파일과 기록 확인 후 재개하세요.'
+                try:
+                    frozen=json.loads(row['execution_plan']) if row['execution_plan'] else legacy_plan()
+                    pipeline=frozen['pipeline']
+                    if not isinstance(pipeline,list) or any(r not in ROLES for r in pipeline) or type(row['stage']) is not int or not 0<=row['stage']<len(pipeline):raise ValueError()
+                    role=pipeline[row['stage']]
+                    if not any(a['id']==frozen['assignment'][role] for a in frozen['agents']):raise ValueError()
+                    blocked=has_vm_input(frozen,role)
+                    if blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
+                except (ValueError,TypeError,KeyError,IndexError,AttributeError):
+                    blocked=True;error='저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
+                retry=not blocked and row['auto_recover'] and row['failures']<3
+                c.execute('UPDATE tasks SET status=?,failures=failures+?,error=? WHERE id=?',('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
 
     def package(self, tid, status, verification=None):
         s=self.store
@@ -445,8 +464,7 @@ class Worker:
                 if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
             transient=e.retryable if isinstance(e,ModelError) else e.code in RETRY_STATUSES if isinstance(e,urllib.error.HTTPError) else isinstance(e,(urllib.error.URLError,TimeoutError,ConnectionError))
             retry=transient and task['failures']<2
-            env=plan.get('environment',{})
-            vm_input=env.get('kind')=='vm' and any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[]))
+            vm_input=has_vm_input(plan,role)
             blocked=retry and vm_input
             message=str(e)
             if transient and task['failures']>=2:message+=' 자동 재시도 한도에 도달했습니다. 서버 상태를 확인한 뒤 수동으로 재개하세요.'
@@ -499,7 +517,20 @@ def serve(root, port, model, url):
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control','no-store')
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            if self.command!='HEAD':self.wfile.write(body)
+        def artifact_plan(self,tid):
+            with store.connect() as c:row=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
+            if not row:self.send(404,{'error':'작업을 찾을 수 없습니다.'});return None
+            try:
+                value=json.loads(row[0]) if row[0] else legacy_plan()
+                if not isinstance(value,dict) or not isinstance(value.get('agents'),list) or any(not isinstance(a,dict) or not isinstance(a.get('id'),str) or not __import__('re').fullmatch('[a-z][a-z0-9_-]{0,31}',a['id']) for a in value['agents']):raise ValueError()
+                return value
+            except (ValueError,TypeError):self.send(409,{'error':'저장된 작업의 팀 구성을 읽지 못했습니다. 데이터 백업을 확인하세요.'});return None
+        def do_HEAD(self):
+            if self.headers.get('Host') not in (f'127.0.0.1:{port}',f'localhost:{port}'):self.send(403,{'error':'host rejected'});return
+            if self.path.startswith('/api/artifact?'):self.do_GET()
+            else:self.send(405,{'error':'HEAD는 결과 파일 조회에만 지원합니다.'})
         def do_GET(self):
             if self.headers.get('Host') not in (f'127.0.0.1:{port}',f'localhost:{port}'):
                 self.send(403,{'error':'host rejected'});return
@@ -559,18 +590,28 @@ def serve(root, port, model, url):
                 index=json.loads((ROOT/'docs'/'index.json').read_text(encoding='utf-8'))
                 if slug not in [d['id'] for d in index]:self.send(404,{'error':'문서를 찾을 수 없습니다.'});return
                 self.send(200,(ROOT/'docs'/f'{slug}.html').read_bytes(),'text/html; charset=utf-8')
+            elif self.path.startswith('/api/artifacts?'):
+                tid=parse_qs(urlparse(self.path).query).get('task',[''])[0];frozen=self.artifact_plan(tid)
+                if frozen is not None:self.send(200,artifact_metadata(store.root,tid,frozen))
             elif self.path.startswith('/api/artifact?'):
                 query=parse_qs(urlparse(self.path).query)
                 tid=query.get('task',[''])[0];name=query.get('file',['report.md'])[0]
-                with store.connect() as c:exists=c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()
-                ids=[a['id'] for a in (json.loads(exists[0]) if exists and exists[0] else legacy_plan())['agents']]
-                valid={'report.md','report.json','artifacts.zip'}|{f'agents/{r}/messages.json' for r in (*ROLES,*ids,'system','user')}
-                if exists and __import__('re').fullmatch(r'vm/r\d+-(planner|developer|reviewer|reporter)-(before|after)\.png',name):valid.add(name)
-                if name not in valid or not exists:
-                    self.send(404,{'error':'artifact not found'});return
-                path=store.root/'tasks'/tid/name
-                if not path.is_file():self.send(404,{'error':'아직 결과물이 생성되지 않았습니다.'});return
-                self.send(200,path.read_bytes(),'image/png' if name.endswith('.png') else 'application/zip' if name.endswith('.zip') else 'application/json; charset=utf-8' if name.endswith('.json') else 'text/plain; charset=utf-8')
+                frozen=self.artifact_plan(tid)
+                if frozen is None:return
+                started=False
+                try:
+                    with open_artifact(store.root,tid,name,frozen) as (stream,info):
+                        self.send_response(200);self.send_header('Content-Type',content_type(name));self.send_header('Content-Length',str(info.st_size))
+                        self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
+                        self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
+                        self.send_header('Content-Disposition',('attachment' if name.endswith('.zip') else 'inline')+'; filename="'+download_name(tid,name)+'"')
+                        self.end_headers();started=True
+                        if self.command!='HEAD':
+                            for block in chunks(stream,info.st_size):self.wfile.write(block)
+                except FileNotFoundError:
+                    if not started:self.send(404,{'error':'결과 파일을 찾을 수 없거나 안전하게 읽을 수 없습니다.'})
+                except OSError:
+                    if not started:self.send(503,{'error':'결과 파일을 읽지 못했습니다. 폴더 권한과 저장소를 확인하세요.'})
             elif self.path.startswith('/api/tasks?'):
                 query=parse_qs(urlparse(self.path).query)
                 try:page=min(1000000,max(0,int(query.get('page',['0'])[0])))
