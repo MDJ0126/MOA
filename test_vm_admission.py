@@ -2,11 +2,12 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import threading
 from unittest.mock import patch
 from app import Store,Worker
 from setup_config import write_setting
 from vm_runtime import DEFAULT
-from vm_runtime import BusyVM,VMAdmissionBusy
+from vm_runtime import BusyVM,VMAdmissionBusy,VM
 from contextlib import contextmanager
 
 class VMAdmissionTests(unittest.TestCase):
@@ -16,6 +17,30 @@ class VMAdmissionTests(unittest.TestCase):
         write_setting(self.store,'vm',{**DEFAULT,'enabled':True})
     def task(self,tid):
         with self.store.connect() as c:return dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
+    def test_separate_instances_cannot_overlap_stage_or_replace_owner(self):
+        first=self.task(self.store.add('first owner','demo',environment='vm'))
+        second=self.task(self.store.add('second owner','demo',environment='vm'))
+        contender=VM(self.store);entered=threading.Event();release=threading.Event();errors=[]
+        def hold():
+            try:
+                with self.worker.vm.stage(first,'planner','first-agent'):
+                    entered.set()
+                    if not release.wait(5):raise AssertionError('stage release timeout')
+            except BaseException as error:errors.append(error);entered.set()
+        with patch.object(self.worker.vm,'_start'),patch.object(self.worker.vm,'capture'),patch.object(contender,'_start') as start,patch.object(contender,'capture') as capture,patch.object(contender,'action') as action:
+            thread=threading.Thread(target=hold);thread.start()
+            try:
+                self.assertTrue(entered.wait(5));self.assertEqual(errors,[])
+                with self.assertRaises(VMAdmissionBusy):
+                    with contender.stage(second,'planner','second-agent'):self.fail('overlapping stage')
+                start.assert_not_called();capture.assert_not_called();action.assert_not_called()
+                self.assertEqual(contender.owner_record()['task_id'],first['id'])
+            finally:release.set();thread.join(5)
+            self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+            with contender.stage(second,'planner','second-agent'):
+                self.assertEqual(contender.owner_record()['task_id'],second['id'])
+            start.assert_called_once();self.assertEqual(capture.call_count,2)
+            self.assertIsNone(contender.owner_record())
     def test_busy_reviewer_does_not_repeat_checks_or_checkpoint(self):
         tid=self.store.add('busy reviewer','ollama',environment='vm');plan=json.loads(self.task(tid)['execution_plan'])
         with self.store.connect() as c:c.execute('UPDATE tasks SET stage=? WHERE id=?',(plan['pipeline'].index('reviewer'),tid))
