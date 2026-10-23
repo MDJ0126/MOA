@@ -22,13 +22,16 @@ def node_executable():
     if override:
         if not Path(override).is_file():
             raise RuntimeError('MOA_NODE가 가리키는 Node 실행 파일을 찾을 수 없습니다.')
-        if not compatible_node(override):raise RuntimeError('MOA_NODE 실행·버전 확인 실패: jsdom 27.4.0에는 '+NODE_REQUIREMENT+'가 필요합니다.')
-        return override
+        selected=Path(override).resolve()
+        if not compatible_node(selected):raise RuntimeError('MOA_NODE 실행·버전 확인 실패: jsdom 27.4.0에는 '+NODE_REQUIREMENT+'가 필요합니다.')
+        return str(selected)
     installed = shutil.which('node')
-    if installed and Path(installed).is_file() and compatible_node(installed):
-        return installed
+    if installed and Path(installed).is_file():
+        selected=Path(installed).resolve()
+        if compatible_node(selected):return str(selected)
     try:bundled = Path.home() / '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
     except RuntimeError:bundled=None
-    if bundled is not None and bundled.is_file() and compatible_node(bundled):
-        return str(bundled)
+    if bundled is not None and bundled.is_file():
+        selected=bundled.resolve()
+        if compatible_node(selected):return str(selected)
     raise RuntimeError('DOM 검증에는 '+NODE_REQUIREMENT+'가 필요합니다. PATH 또는 MOA_NODE를 설정하세요.')
