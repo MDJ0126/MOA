@@ -84,4 +84,18 @@ class HistoryRecoveryTests(unittest.TestCase):
                 with store.connect() as c:
                     self.assertEqual([r[0] for r in c.execute("SELECT content FROM messages WHERE task_id=? AND kind='instruction' AND content LIKE '%DAMAGED_RECIPIENT%' ORDER BY seq",(tid,))],records)
 
+    def test_nonfinite_plan_metadata_does_not_leak_nonstandard_json(self):
+        from setup_config import legacy_plan
+        for number in ('NaN','Infinity','-Infinity','1e309'):
+            plan=legacy_plan();plan['legacy_metadata']={'limit':'NUMERIC_MARKER'}
+            raw=json.dumps(plan).replace('"NUMERIC_MARKER"',number)
+            with self.subTest(number=number),self.server(raw) as (store,tid,base):
+                for route in ('/api/logs/export?task='+tid,'/api/logs?task='+tid,'/api/state'):
+                    with urllib.request.urlopen(base+route,timeout=5) as response:
+                        value=json.loads(response.read(),parse_constant=lambda token:self.fail('nonstandard JSON constant: '+token))
+                    if route=='/api/state':self.assertTrue(next(task for task in value['tasks'] if task['id']==tid)['execution_plan_unavailable'])
+                    else:
+                        self.assertTrue(value['plan_unavailable']);self.assertIn('ORIGINAL_REQUEST_MARKER',str(value['messages']))
+                with store.connect() as c:self.assertEqual(c.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],raw)
+
 if __name__=='__main__':unittest.main()

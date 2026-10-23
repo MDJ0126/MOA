@@ -42,6 +42,7 @@ def history_plan(raw):
     try:
         plan=json.loads(raw)
         if not isinstance(plan,dict):return None
+        json.dumps(plan,allow_nan=False)
         clean=validate_team({'agents':plan.get('agents'),'pipeline':plan.get('pipeline')})
         assignment=plan.get('assignment')
         if not isinstance(assignment,dict):return None
@@ -50,7 +51,7 @@ def history_plan(raw):
             actor=assignment.get(role)
             if not isinstance(actor,str) or actor not in agents or role not in agents[actor]['capabilities']:return None
         return plan
-    except (ValueError,TypeError,UnicodeError,OverflowError):return None
+    except (ValueError,TypeError,UnicodeError,OverflowError,RecursionError):return None
 
 
 def task_messages(connection,tid,plan,agent='',limit=50001,before=None,descending=False):
