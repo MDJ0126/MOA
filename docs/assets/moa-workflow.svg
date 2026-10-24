@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
+  <title id="title">모아의 작업 흐름</title>
+  <desc id="desc">할 일과 완료 조건을 입력하면 계획, 개발, 검증, 보고를 순서대로 진행합니다. 팀은 내 PC의 로컬 모델 하나를 공유하고 결과를 파일, 보고서, ZIP으로 정리합니다.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="m1 1 3 3-3 3" fill="none" stroke="#b9978e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="960" height="300" rx="24" fill="#fff8f5"/>
+  <g font-family="Segoe UI, Malgun Gothic, sans-serif">
+    <text x="40" y="47" fill="#a64d38" font-size="12" font-weight="700" letter-spacing="3">MOA · LOCAL AGENT TEAM</text>
+    <text x="40" y="83" fill="#342b29" font-size="24" font-weight="700">할 일을 맡기면, 작은 팀이 이어갑니다.</text>
+    <g fill="#fff" stroke="#eed9d2">
+      <rect x="40" y="115" width="166" height="82" rx="16"/>
+      <rect x="278" y="115" width="142" height="82" rx="16"/>
+      <rect x="444" y="115" width="142" height="82" rx="16"/>
+      <rect x="610" y="115" width="142" height="82" rx="16"/>
+      <rect x="776" y="115" width="142" height="82" rx="16"/>
+    </g>
+    <g stroke="#b9978e" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M218 156h44"/><path d="M426 156h12"/><path d="M592 156h12"/><path d="M758 156h12"/>
+    </g>
+    <g text-anchor="middle">
+      <text x="123" y="148" fill="#342b29" font-size="18" font-weight="700">할 일 입력</text>
+      <text x="123" y="174" fill="#78635d" font-size="13">원하는 결과 + 완료 조건</text>
+      <g fill="#bd5138" font-size="18" font-weight="700">
+        <text x="349" y="148">01 계획</text><text x="515" y="148">02 개발</text><text x="681" y="148">03 검증</text><text x="847" y="148">04 보고</text>
+      </g>
+      <g fill="#78635d" font-size="13">
+        <text x="349" y="174">단계와 기준 정하기</text><text x="515" y="174">실제 파일 만들기</text><text x="681" y="174">파일 · Python 테스트</text><text x="847" y="174">보고서 · 결과물 ZIP</text>
+      </g>
+    </g>
+    <path d="M294 219h608" stroke="#eed9d2" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="429" cy="253" r="4" fill="#e76f51"/>
+    <text x="443" y="258" fill="#78635d" font-size="14">내 PC · 로컬 모델 하나 · 순차 실행</text>
+  </g>
+</svg>

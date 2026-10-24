@@ -13,7 +13,7 @@ import urllib.request
 from app import Store,Worker
 from setup_config import save_team,PRESETS
 from soak import freeze
-from test_runtime import node_executable
+from tests.test_runtime import node_executable
 
 ROOT=Path(__file__).resolve().parent
 

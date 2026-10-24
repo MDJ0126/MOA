@@ -16,6 +16,7 @@ def copy_sources(destination):
         for source in ROOT.glob(pattern):shutil.copyfile(source,destination/source.name)
     for name in ('config.json','requirements.txt'):shutil.copyfile(ROOT/name,destination/name)
     shutil.copytree(ROOT/'docs',destination/'docs')
+    shutil.copytree(ROOT/'tests',destination/'tests',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 
 
 def run_units(project,timeout=240):
@@ -42,7 +43,7 @@ def main(ui=False):
         result=subprocess.run([sys.executable,'verify_system.py'],cwd=project,timeout=90)
         if result.returncode:return result.returncode
         if ui:
-            from test_runtime import node_executable
+            from tests.test_runtime import node_executable
             environment=dict(os.environ,MOA_NODE=node_executable())
             dependency=Path(environment.get('MOA_JSDOM',ROOT/'runtime/ui-tests/node_modules/jsdom')).resolve()
             if not (dependency/'package.json').is_file():raise RuntimeError('UI 검증에는 jsdom 27.4.0이 필요합니다. MOA_JSDOM 또는 개발자 가이드를 확인하세요.')

@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from socket import socket
 import urllib.request
-from test_runtime import node_executable
+from tests.test_runtime import node_executable
 from soak import freeze
 
 root=Path(__file__).resolve().parent
@@ -21,28 +21,28 @@ with tempfile.TemporaryDirectory(dir=root) as data:
             except OSError:
                 if process.poll() is not None:raise RuntimeError(process.communicate())
                 time.sleep(.1)
-        result=subprocess.run([str(node),'test_ui.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        result=subprocess.run([str(node),'tests/test_ui.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(result.stdout);print(result.stderr)
         if result.returncode:raise SystemExit(result.returncode)
-        drafts=subprocess.run([str(node),'test_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        drafts=subprocess.run([str(node),'tests/test_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(drafts.stdout);print(drafts.stderr)
         if drafts.returncode:raise SystemExit(drafts.returncode)
-        steps=subprocess.run([str(node),'test_vm_steps.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        steps=subprocess.run([str(node),'tests/test_vm_steps.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(steps.stdout);print(steps.stderr)
         if steps.returncode:raise SystemExit(steps.returncode)
-        profiles=subprocess.run([str(node),'test_execution_profiles.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        profiles=subprocess.run([str(node),'tests/test_execution_profiles.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(profiles.stdout);print(profiles.stderr)
         if profiles.returncode:raise SystemExit(profiles.returncode)
-        vbox=subprocess.run([str(node),'test_vbox_setup.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        vbox=subprocess.run([str(node),'tests/test_vbox_setup.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(vbox.stdout);print(vbox.stderr)
         if vbox.returncode:raise SystemExit(vbox.returncode)
-        install=subprocess.run([str(node),'test_vbox_install.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        install=subprocess.run([str(node),'tests/test_vbox_install.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(install.stdout);print(install.stderr)
         if install.returncode:raise SystemExit(install.returncode)
-        startup=subprocess.run([str(node),'test_startup_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        startup=subprocess.run([str(node),'tests/test_startup_drafts.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(startup.stdout);print(startup.stderr)
         if startup.returncode:raise SystemExit(startup.returncode)
-        recovery=subprocess.run([str(node),'test_team_recovery.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
+        recovery=subprocess.run([str(node),'tests/test_team_recovery.cjs',f'http://127.0.0.1:{port}'],cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
         print(recovery.stdout);print(recovery.stderr)
         if recovery.returncode:raise SystemExit(recovery.returncode)
     finally:

@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 from app import Store
 from setup_config import save_team,PRESETS
-from test_runtime import node_executable
+from tests.test_runtime import node_executable
 
 ROOT=Path(__file__).resolve().parent
 with socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             try:request(path,data);raise AssertionError('invalid input accepted')
             except urllib.error.HTTPError as error:assert error.code==400,(path,error.code)
         node=node_executable()
-        subprocess.run([str(node),'test_history.cjs',f'http://127.0.0.1:{port}'],cwd=ROOT,check=True,timeout=25)
+        subprocess.run([str(node),'tests/test_history.cjs',f'http://127.0.0.1:{port}'],cwd=ROOT,check=True,timeout=25)
         print('PASS: 635 tasks across 22 pages, full-history search, 405 unique logs across 3 pages, malformed requests return 400')
     finally:
         process.terminate();process.wait(timeout=10)
