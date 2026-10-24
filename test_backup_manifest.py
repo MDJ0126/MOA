@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 from app import Store
-from data_backup import backup,restore
+from data_backup import backup,restore,inspect_backup
 
 
 class BackupManifestTests(unittest.TestCase):
@@ -44,6 +44,14 @@ class BackupManifestTests(unittest.TestCase):
     def test_generated_manifest_still_roundtrips(self):
         restored=self.root/'restored';restore(self.archive,restored)
         with Store(restored).connect() as connection:self.assertEqual(connection.execute('SELECT count(*) FROM tasks').fetchone()[0],0)
+    def test_preview_rejects_changed_open_file_and_closes_handle(self):
+        other=self.root/'other.zip';other.write_bytes(self.archive.read_bytes())
+        handle=other.open('rb');original_open=Path.open
+        def swapped_open(path,*args,**kwargs):
+            return handle if path==self.archive else original_open(path,*args,**kwargs)
+        with patch.object(Path,'open',swapped_open):
+            with self.assertRaisesRegex(ValueError,'변경'):inspect_backup(self.archive)
+        self.assertTrue(handle.closed);self.assertEqual(list(self.root.glob('tmp*')),[])
     def test_inconsistent_file_metadata_is_rejected_before_payload_read(self):
         original_open=zipfile.ZipFile.open
         for changes in ({'size':0},{'size':self.manifest['files']['state.sqlite3']['size']+1},{'sha256':'invalid'}):

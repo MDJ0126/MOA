@@ -16,6 +16,7 @@ import urllib.request
 from app import Store
 from app_lifecycle import request_stop
 from backup_jobs import schedule_request
+from data_backup import backup
 from verify_clean_install import copy_sources
 
 
@@ -28,6 +29,9 @@ class BackupHttpBoundaryTests(unittest.TestCase):
             receipt=schedule_request(store,project,'request-123',123,lambda *a,**k:SimpleNamespace(pid=456))
             archive=project/'backups'/receipt['file'];status=archive.with_suffix('.status.json')
             outside=root/'unrelated';outside.write_text(json.dumps({'state':'completed'}))
+            external_backup=root/'external.zip';backup(store.root,external_backup)
+            linked_backup=project/'backups'/'linked.zip';os.link(external_backup,linked_backup)
+            external_bytes=external_backup.read_bytes()
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             base='http://127.0.0.1:'+str(port)
             def request(path,data=None):
@@ -42,6 +46,10 @@ class BackupHttpBoundaryTests(unittest.TestCase):
                             if process.poll() is not None:self.fail('isolated app exited')
                             time.sleep(.05)
                     else:self.fail('isolated app readiness timeout')
+                    with self.assertRaises(HTTPError) as rejected:request('/api/backups/inspect',{'name':linked_backup.name})
+                    self.assertEqual(rejected.exception.code,400);rejected.exception.close()
+                    self.assertEqual(external_backup.read_bytes(),external_bytes)
+                    linked_backup.unlink()
                     nested=project/'backups'/'nested.zip'
                     with zipfile.ZipFile(nested,'w',zipfile.ZIP_DEFLATED) as output:
                         output.writestr('manifest.json','{"version":1,"files":{},"extra":'+'['*20000+'0'+']'*20000+'}')

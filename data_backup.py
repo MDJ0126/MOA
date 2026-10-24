@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import re
 import sqlite3
+import stat
 import tempfile
 import time
 import zipfile
@@ -246,9 +247,15 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
 def inspect_backup(archive):
     """Fully validate in a temporary folder without replacing installed data."""
     archive = Path(archive)
-    with tempfile.TemporaryDirectory(dir=archive.parent) as temporary:
+    initial=archive.lstat()
+    def valid(info):return stat.S_ISREG(info.st_mode) and info.st_nlink==1 and not getattr(info,'st_file_attributes',0)&0x400
+    if not valid(initial):raise ValueError('백업 파일은 링크가 아닌 독립된 일반 파일이어야 합니다.')
+    with archive.open('rb') as source,tempfile.TemporaryDirectory(dir=archive.parent) as temporary:
+        opened=os.fstat(source.fileno());current=archive.lstat()
+        if not valid(opened) or not valid(current) or (initial.st_dev,initial.st_ino)!=(opened.st_dev,opened.st_ino) or (opened.st_dev,opened.st_ino)!=(current.st_dev,current.st_ino):
+            raise ValueError('백업 파일이 검사 시작 중 변경되었습니다.')
         destination = Path(temporary) / 'preview'
-        count = restore(archive, destination, max_bytes=512 * 1024**2)
+        count = restore(source, destination, max_bytes=512 * 1024**2)
         with closing(sqlite3.connect(destination / 'state.sqlite3')) as c:
             tasks = c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
             messages = c.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
