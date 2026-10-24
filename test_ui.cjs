@@ -220,6 +220,11 @@ async function main(){
  const pending=w.testInstallation('inspect-backup');input('#backupFile','second.zip','change');input('#backupFile','first.zip','change');finish();
  await assert.doesNotReject(pending);assert.equal(d.querySelector('#backupResult').textContent,'');
  }
+ for(const failed of [false,true]){
+ let finish,count=0;w.fetch=(path,options)=>{if(path!=='/api/backups')return installationFetch(path,options);if(count++===0)return new Promise(resolve=>{finish=()=>resolve(new Response(JSON.stringify(failed?{error:'old list error'}:{files:['old.zip']}),{status:failed?503:200}))});return Promise.resolve(new Response(JSON.stringify({files:['latest.zip']})))};
+ const pending=w.testInstallation('list-backups');await w.testInstallation('list-backups');input('#backupFile','latest.zip','change');finish();await assert.doesNotReject(pending);
+ assert.equal(d.querySelector('#backupFile').value,'latest.zip');assert.equal(d.querySelector('#backupResult').textContent,'');
+ }
  let backupKey=null,backupPosts=0;
  w.fetch=async(path,options)=>{if(path==='/api/backups/create'){const body=JSON.parse(options.body);if(backupKey)assert.equal(body.request_key,backupKey);backupKey=body.request_key;backupPosts++;if(backupPosts===1)throw Error('simulated lost backup response');return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'앱 종료 후 백업합니다.'}),{status:202,headers:{'Content-Type':'application/json'}})}if(path.startsWith('/api/backups/request?'))return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'접수된 백업입니다.'}),{headers:{'Content-Type':'application/json'}});return installationFetch(path,options)};
  click('[data-action="create-backup"]');await until(()=>d.querySelector('#backupCreateState').dataset.accepted==='unknown','lost backup response');
