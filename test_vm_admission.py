@@ -17,6 +17,24 @@ class VMAdmissionTests(unittest.TestCase):
         write_setting(self.store,'vm',{**DEFAULT,'enabled':True})
     def task(self,tid):
         with self.store.connect() as c:return dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
+    def test_saved_click_default_is_applied_before_any_input(self):
+        tid=self.store.add('legacy click default','demo',environment='vm',vm_actions=[{'role':'planner','action':'click','x':10,'y':20}])
+        task=self.task(tid);plan=json.loads(task['execution_plan']);del plan['environment']['actions'][0]['button']
+        task['execution_plan']=json.dumps(plan)
+        with patch.object(self.worker.vm,'_start'),patch.object(self.worker.vm,'capture'),patch.object(self.worker.vm,'qmp') as qmp,patch('vm_runtime.time.sleep'):
+            with self.worker.vm.stage(task,'planner','builder'):pass
+        buttons=[args.args[1]['events'][0]['data']['button'] for args in qmp.call_args_list if args.args[1]['events'][0]['type']=='btn']
+        self.assertEqual(buttons,['left','left']);self.assertIsNone(self.worker.vm.owner_record())
+    def test_invalid_saved_actions_never_start_or_send_input(self):
+        tid=self.store.add('bad stored input','demo',environment='vm');task=self.task(tid)
+        for action in ({'role':'planner','action':'click','x':-1,'y':1},{'role':'planner','action':'key','keys':['unsupported']},{'role':'unknown','action':'capture'}):
+            with self.subTest(action=action):
+                plan=json.loads(task['execution_plan']);plan['environment']['actions']=[{'role':'planner','action':'click','x':1,'y':1},action]
+                damaged={**task,'execution_plan':json.dumps(plan)}
+                with patch.object(self.worker.vm,'_start') as start,patch.object(self.worker.vm,'capture') as capture,patch.object(self.worker.vm,'qmp') as qmp:
+                    with self.assertRaises(ValueError):
+                        with self.worker.vm.stage(damaged,'planner','builder'):self.fail('invalid stage entered')
+                start.assert_not_called();capture.assert_not_called();qmp.assert_not_called()
     def test_separate_instances_cannot_overlap_stage_or_replace_owner(self):
         first=self.task(self.store.add('first owner','demo',environment='vm'))
         second=self.task(self.store.add('second owner','demo',environment='vm'))

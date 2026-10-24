@@ -387,10 +387,12 @@ class VM:
 
     @contextmanager
     def stage(self,task,role,actor,before=None):
-        env=(json.loads(task['execution_plan']) if task['execution_plan'] else {}).get('environment',{})
+        plan=json.loads(task['execution_plan']) if task['execution_plan'] else {}
+        env=plan.get('environment',{})
         if env.get('kind')!='vm':
             if before:before()
             yield;return
+        actions=validate_actions(env.get('actions',[]),plan.get('pipeline',[]))
         with self.admission():
             if not same_configuration(env.get('config') or {},settings(self.store)):raise ValueError('접수 이후 VM 설정이 변경되었습니다. 현재 환경으로 새 작업을 등록하세요.')
             def active():
@@ -408,7 +410,7 @@ class VM:
                 if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
                 capture_started=True
                 self.capture(folder/(stamp+'-before.png'))
-                for action in env.get('actions',[]):
+                for action in actions:
                     if action['role']!=role:continue
                     if not active():raise ValueError('취소되거나 종료된 VM 작업입니다.')
                     self.action(action);self.store.log(task['id'],actor,'vm_action',json.dumps(action,ensure_ascii=False))
