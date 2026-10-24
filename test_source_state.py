@@ -12,13 +12,13 @@ import unittest
 import urllib.request
 from app import Store
 from app_lifecycle import request_stop
-from verify_clean_install import copy_sources
+from soak import freeze
 
 
 class RunningSourceHttpTests(unittest.TestCase):
     def test_changed_dependency_requires_restart_without_stopping_app(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
-            root=Path(temporary);project=root/'source';copy_sources(project);store=Store(root/'data');store.control('pause')
+            root=Path(temporary);project=root/'source';freeze(project);store=Store(root/'data');store.control('pause')
             (project/'config.json').write_text(json.dumps({'default_mode':'demo','model':'','model_url':'http://127.0.0.1:0','slack':{'enabled':False}}))
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             base='http://127.0.0.1:'+str(port)
