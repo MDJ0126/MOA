@@ -95,4 +95,22 @@ class EnvironmentProfilesTests(unittest.TestCase):
         for changes in ({'available_ram_gib':17},{'logical_cpus':1.5},{'logical_cpus':True},{'cpu_used_percent':101}):
             with self.subTest(changes=changes):self.assertIsNone(recommend({},self.host(**changes))['recommended'])
 
+    def test_memory_and_cpu_pressure_matrix_preserves_host_reserves(self):
+        for free in (0,2,4,8,16):
+            for cores in (1,2,4,12):
+                for percent in (25,50,75):
+                    for usage in (0,50,99,100):
+                        with self.subTest(free=free,cores=cores,percent=percent,usage=usage):
+                            result=recommend({'target_os':'linux','budget_percent':percent},self.host(available_ram_gib=free,logical_cpus=cores,cpu_used_percent=usage))
+                            self.assertLessEqual(result['memory_budget_mb']/1024,max(0,free-2))
+                            self.assertLessEqual(result['memory_budget_mb']/1024,16-6)
+                            self.assertLessEqual(result['memory_budget_mb']/1024,16*percent/100)
+                            self.assertLessEqual(result['cpu_budget'],int(cores*percent/100))
+                            self.assertLessEqual(result['cpu_budget'],int(cores*(1-usage/100)))
+                            if result['recommended']:
+                                selected=next(p for p in result['presets'] if p['id']==result['recommended'])
+                                self.assertLessEqual(selected['memory_mb'],result['memory_budget_mb'])
+                                self.assertLessEqual(selected['cpus'],result['cpu_budget'])
+                            else:self.assertFalse(any(p['fits_now'] is True for p in result['presets']))
+
 if __name__=='__main__':unittest.main()
