@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testOpenTask=openTask;window.testLoadArtifacts=loadArtifacts;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
+w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testInstallation=manageInstallation;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testOpenTask=openTask;window.testLoadArtifacts=loadArtifacts;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
@@ -214,6 +214,12 @@ async function main(){
  assert.ok(d.querySelector('#backupResult').textContent.includes('현재 데이터는 변경하지'));
  w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({error:'손상된 백업입니다.'}),{status:400,headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
  click('[data-action="inspect-backup"]');await until(()=>d.querySelector('#backupResult').textContent.includes('손상된 백업'),'backup error preservation');
+ for(const failed of [false,true]){
+ let finish;w.fetch=(path,options)=>path==='/api/backups/inspect'?new Promise(resolve=>{finish=()=>resolve(new Response(JSON.stringify(failed?{error:'old backup error'}:{files:999,tasks:999,messages:999}),{status:failed?400:200}))}):installationFetch(path,options);
+ d.querySelector('#backupFile').innerHTML='<option value="first.zip">first.zip</option><option value="second.zip">second.zip</option>';
+ const pending=w.testInstallation('inspect-backup');input('#backupFile','second.zip','change');input('#backupFile','first.zip','change');finish();
+ await assert.doesNotReject(pending);assert.equal(d.querySelector('#backupResult').textContent,'');
+ }
  let backupKey=null,backupPosts=0;
  w.fetch=async(path,options)=>{if(path==='/api/backups/create'){const body=JSON.parse(options.body);if(backupKey)assert.equal(body.request_key,backupKey);backupKey=body.request_key;backupPosts++;if(backupPosts===1)throw Error('simulated lost backup response');return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'앱 종료 후 백업합니다.'}),{status:202,headers:{'Content-Type':'application/json'}})}if(path.startsWith('/api/backups/request?'))return new Response(JSON.stringify({file:'test.zip',state:'waiting',message:'접수된 백업입니다.'}),{headers:{'Content-Type':'application/json'}});return installationFetch(path,options)};
  click('[data-action="create-backup"]');await until(()=>d.querySelector('#backupCreateState').dataset.accepted==='unknown','lost backup response');
