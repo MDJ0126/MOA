@@ -1,64 +1,77 @@
+<p align="center"><a href="README.md">English</a> | <a href="README.ko.md">한국어</a></p>
+
 <p align="center">
-  <img src="docs/assets/moa-logo.png" alt="모아 — 코럴색으로 이어지는 에이전트 팀 로고" width="96">
+  <img src="docs/assets/moa-logo.png" alt="MOA agent team logo" width="96">
 </p>
-<h1 align="center">모아 · MOA</h1>
-<p align="center"><strong>작은 팀이 차례대로, 당신의 일을 이어갑니다.</strong></p>
-<p align="center">내 PC에서 실행하는 로컬 AI 에이전트 팀</p>
+<h1 align="center">MOA · 모아</h1>
+<p align="center"><strong>A small team, working together one step at a time.</strong></p>
+<p align="center">A local AI agent team running on your PC</p>
 <p align="center">
-  <a href="#빠른-시작">빠른 시작</a> &middot;
-  <a href="docs/README.md">문서</a> &middot;
-  <a href="docs/development.md">개발·검증 안내</a>
+  <a href="#quick-start">Quick start</a> &middot;
+  <a href="docs/README.md">Documentation (Korean)</a> &middot;
+  <a href="docs/development.md">Development and validation (Korean)</a>
 </p>
 
 ---
 
-할 일과 완료 조건을 입력하면 **계획 → 개발 → 검증 → 보고**를 순서대로 진행합니다. 팀원들이 로컬 모델 하나를 공유하고, 대화와 결과물은 PC에 저장합니다.
+Describe your task and completion criteria. MOA works through **plan → develop → validate → report** in order. Team members share a single local model, and conversations and deliverables are stored on your PC.
 
-<p align="center">
-  <img src="docs/assets/moa-workflow.svg" alt="할 일과 완료 조건 입력 → 계획 → 개발 → 파일·Python 검증 → 보고서·ZIP. 팀은 내 PC의 모델 하나를 순차 사용합니다." width="960">
-</p>
+**Workflow:** Task and completion criteria → Plan → Develop → Validate files and Python tests → Report and ZIP archive.
 
-## 빠른 시작
+## Quick start
 
-**Windows x64 · Python 3.11 이상**이 필요합니다. 저장소를 내려받은 폴더에서 PowerShell로 실행해 주세요.
+Requires **Windows x64 and Python 3.11 or later**. Run the following commands in PowerShell from the repository folder.
 
-모델 설치 없이 먼저 체험하려면:
+Try the demo without installing a model:
 
 ```powershell
 .\Start.ps1 -Demo
 ```
 
-앱이 실행되면 브라우저 주소창에 `http://127.0.0.1:8767`을 입력하세요. 팀 구성 저장 → 할 일 맡기기 → 결과 확인 순서로 체험합니다.
-데모는 샘플 결과로 흐름을 보여주며, 실제 AI·Slack·VM에 연결하지 않습니다.
+Once the app starts, open `http://127.0.0.1:8767` in your browser. Save your team configuration, assign a task, and review the results.
+The demo uses sample results to demonstrate the workflow; it does not connect to a real AI model, Slack, or a VM.
 
-실제 로컬 AI를 사용하려면:
+To use a real local AI model:
 
 ```powershell
 .\Install.ps1 -DownloadModel
 .\Start.ps1
 ```
 
-앱이 실행되면 브라우저 주소창에 `http://127.0.0.1:8765`를 입력하세요. 기본 모델은 Qwen2.5-Coder-7B-Instruct Q4_K_M이며, 모델 다운로드에 약 4.68GB가 필요합니다. CPU로 한 번에 하나의 추론을 실행합니다.
+Once the app starts, open `http://127.0.0.1:8765`. The default model is Qwen2.5-Coder-7B-Instruct Q4_K_M, which requires a download of approximately 4.68 GB. Inference runs on the CPU, one request at a time.
 
-종료는 `.\Stop.ps1`, 데모 종료는 `.\Stop.ps1 -Port 8767`입니다.
+Stop the app with `.\Stop.ps1`, or stop the demo with `.\Stop.ps1 -Port 8767`.
 
-## 할 수 있는 일
+## Features
 
-- **내 팀 구성** — 1~8명, 이름·역할·추가 지침 설정
-- **작업과 대화** — 담당자별 진행 상황, 내부 인계와 기록 확인
-- **검증과 결과물** — 필수 파일·Python 테스트 확인, 실패 시 설정 한도 내 수정, 보고서·ZIP 다운로드
-- **선택 연결** — Slack 지시·보고, 팀이 순서대로 사용하는 공유 VM
+- **Build your team** — Configure 1–8 members with names, roles, and additional instructions.
+- **Tasks and conversations** — Follow each member's progress, internal handoffs, and activity history.
+- **Validation and deliverables** — Check required files and Python tests, retry fixes within configured limits, and download reports and ZIP archives.
+- **Optional integrations** — Send instructions and receive reports through Slack, or connect a shared VM used by team members in sequence.
 
-## 문서
+## Documentation
 
-[문서 모음](docs/README.md)에서 시작·팀 구성·모델·Slack·VM·백업·문제 해결 안내를 확인하실 수 있습니다. 실행 중에는 앱의 **사용 가이드**에서 스크린샷과 함께 읽으실 수 있습니다.
+### Slack collaboration and actual guest work
 
-개발 환경 구성과 검증 명령, 상세 동작은 [개발·검증 안내](docs/development.md)에 정리했습니다.
+Enable **Slack collaboration, images and actual VM work** in Slack settings. Each teammate publishes a short public plan, command results and VM screenshots in the task thread. The next teammate waits for confirmed Slack delivery and image uploads. Separate bot connections can be assigned to individual teammates.
 
-테스트 파일은 [`tests/`](tests/)에 모았습니다. 저장소 루트에서 `python -m unittest -q`로 실행할 수 있습니다.
+Actual guest tasks run model-selected shell commands inside the bundled Tiny Core QEMU VM, read its serial output and exit codes, and export the guest workspace as `guest-workspace.tar.gz` in the result ZIP. Host Python acceptance code is not used for this mode; describe guest checks in the task. The default text model shares images but does not interpret their visual content.
 
-## 현재 범위
+Create and authorize a Slack workspace/app first. Ready manifests are in `docs/slack-apps/`; enter tokens only in the local settings screen. See the in-app Slack guide for the connection steps. `tools/verify_guest_live.py` checks actual guest commands and export; `tools/verify_guest_model_live.py` checks actual model-to-guest work and ZIP readback. Neither script pretends an unconfigured Slack account is connected.
 
-실제 코드 실행 검증은 **Python**을 대상으로 합니다. C#·C++ 컴파일러와 게임 엔진 검증은 연결하지 않았으며, 기본 모델은 비전 모델이 아닙니다. Slack은 계정 설정 후 연결해야 합니다.
+The [documentation index](docs/README.md) covers setup, team configuration, models, Slack, VMs, backups, and troubleshooting. While the app is running, its **User Guide (사용 가이드)** also provides instructions with screenshots. These guides are currently in Korean.
 
-Python 테스트는 현재 사용자 권한으로 실행되며 OS 보안 샌드박스가 아닙니다. VM·Slack의 실제 사용 범위와 운영 제한은 [상세 안내](docs/development.md)를 확인해 주세요.
+See [Development and validation](docs/development.md) for development setup, validation commands, and detailed behavior (Korean).
+
+Tests are in [`tests/`](tests/). Run `python -m unittest -q` from the repository root.
+
+## Current scope
+
+Executable code validation currently targets **Python**. C# and C++ compilers and game engine validation are not integrated, and the default model does not support vision. Slack requires account configuration before use.
+
+Python tests run with your current user permissions; they are not isolated by an OS security sandbox. See the [detailed guide](docs/development.md) for VM and Slack capabilities and operational limits (Korean).
+
+
+## Prompt assistant and specialist roles
+
+Refine a request into six fields, review it, then apply it before assigning the task. Configure each agent’s specialist role in Team Settings. See the [usage guide (Korean)](docs/prompt-assistant.md).
