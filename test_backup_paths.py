@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import hashlib
 import json
+import os
 import zipfile
 from unittest.mock import patch
 from app import Store
@@ -40,7 +41,12 @@ class BackupPathConsistencyTests(unittest.TestCase):
         backup(self.source,self.archive);restore(self.archive,self.root/'restored')
         self.assertEqual((self.root/'restored/tasks/task-one/workspace/example.py').read_bytes(),b'answer=42\n')
     def test_file_growth_during_read_does_not_publish_backup(self):
+        self.assert_changed_file_not_published('growth')
+    def test_same_size_edit_during_read_does_not_publish_backup(self):
+        self.assert_changed_file_not_published('same-size')
+    def assert_changed_file_not_published(self,change):
         candidate=self.source/'result.txt';candidate.write_bytes(b'original')
+        original_stat=candidate.stat()
         original_open=Path.open;handles=[]
         class ChangingReader:
             def __init__(self,stream):self.stream=stream;self.changed=False
@@ -51,7 +57,9 @@ class BackupPathConsistencyTests(unittest.TestCase):
                 value=self.stream.read(size)
                 if not self.changed:
                     self.changed=True
-                    with original_open(candidate,'ab') as writer:writer.write(b' changed')
+                    with original_open(candidate,'ab' if change=='growth' else 'wb') as writer:
+                        writer.write(b' changed' if change=='growth' else b'updated!')
+                    if change=='same-size':os.utime(candidate,ns=(original_stat.st_atime_ns,original_stat.st_mtime_ns+1_000_000_000))
                 return value
         def changing_open(path,*args,**kwargs):
             stream=original_open(path,*args,**kwargs)
@@ -60,7 +68,7 @@ class BackupPathConsistencyTests(unittest.TestCase):
         with patch.object(Path,'open',changing_open):
             with self.assertRaisesRegex(ValueError,'변경'):backup(self.source,self.archive)
         self.assertFalse(self.archive.exists());self.assertTrue(all(handle.closed for handle in handles))
-        self.assertEqual(candidate.read_bytes(),b'original changed')
+        self.assertEqual(candidate.read_bytes(),b'original changed' if change=='growth' else b'updated!')
     def test_nonportable_archive_names_are_rejected_before_writing(self):
         backup(self.source,self.archive)
         with zipfile.ZipFile(self.archive) as original:
