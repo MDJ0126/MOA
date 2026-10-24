@@ -15,6 +15,7 @@ from unittest.mock import patch
 from app import Store,Worker,serve
 from setup_config import PRESETS,save_team,write_setting
 from verify_clean_install import copy_sources
+from data_backup import backup,restore
 
 
 class DemoLaunchTests(unittest.TestCase):
@@ -23,9 +24,10 @@ class DemoLaunchTests(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
 
     @contextmanager
-    def launch(self,powershell=False):
+    def launch(self,powershell=False,data=None):
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         command=[sys.executable,str(self.project/'app.py'),'--demo','--port',str(port)]
+        if data is not None:command+=['--data',str(data)]
         if powershell:
             shell=shutil.which('pwsh') or shutil.which('powershell')
             if not shell:self.skipTest('PowerShell unavailable')
@@ -75,6 +77,34 @@ class DemoLaunchTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code,400);caught.exception.close()
             self.assertEqual(request('/api/state')['tasks'],[])
             self.assertEqual(request('/api/vm')['state'],'stopped')
+
+    def test_completed_team_history_and_downloads_survive_restore_and_launch(self):
+        source=self.project/'data-demo';store=Store(source)
+        team=json.loads(json.dumps(PRESETS[1]));team['agents'][0]['name']='복원 확인 담당'
+        save_team(store,team)
+        def download(request,tid,name):
+            with urllib.request.urlopen(f'http://127.0.0.1:{request.port}/api/artifact?task={tid}&file={name}',timeout=3) as response:return response.read()
+        with self.launch() as request:
+            tid=request('/api/tasks',{'title':'restore completed team history'})['id']
+            for _ in range(120):
+                task=next(t for t in request('/api/state')['tasks'] if t['id']==tid)
+                if task['status']=='completed':break
+                time.sleep(.05)
+            else:self.fail('demo task completion timeout')
+            before=request('/api/logs/export?task='+tid)['messages']
+            self.assertTrue(any(message['kind']=='start' for message in before))
+            artifacts={name:download(request,tid,name) for name in ('report.md','report.json','artifacts.zip')}
+            self.assertTrue(all(artifacts.values()))
+        archive=self.root/'saved.zip';backup(source,archive);original=archive.read_bytes()
+        destination=self.root/'restored';restore(archive,destination)
+        with self.launch(data=destination) as request:
+            state=request('/api/state');self.assertTrue(state['paused']);self.assertTrue(state['demo_only'])
+            self.assertEqual([(t['id'],t['status']) for t in state['tasks']],[(tid,'completed')])
+            self.assertEqual(request('/api/setup')['team']['agents'][0]['name'],'복원 확인 담당')
+            self.assertEqual(request('/api/logs/export?task='+tid)['messages'],before)
+            for name,expected in artifacts.items():self.assertEqual(download(request,tid,name),expected,name)
+            self.assertEqual(request('/api/logs/export?task='+tid)['messages'],before)
+        self.assertEqual(archive.read_bytes(),original)
 
     def test_operating_data_and_connected_data_are_rejected_before_start(self):
         with patch('app.ROOT',self.project),patch('app.Worker') as worker:
