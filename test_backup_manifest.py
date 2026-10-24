@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sys
 from pathlib import Path
 import tempfile
@@ -35,6 +36,25 @@ class BackupManifestTests(unittest.TestCase):
         value={**self.manifest,'version':True};self.replace_manifest(json.dumps(value))
         with self.assertRaisesRegex(ValueError,'지원'):restore(self.archive,self.root/'restored')
         self.assertFalse((self.root/'restored').exists())
+    def test_file_directory_collisions_are_rejected_before_payload_reads(self):
+        original_open=zipfile.ZipFile.open
+        for paths in (('item','item/child.txt'),('item/child.txt','item'),('Item','item/child.txt')):
+            with self.subTest(paths=paths):
+                value=json.loads(json.dumps(self.manifest));payload=b'x'
+                for name in paths:value['files'][name]={'size':1,'sha256':hashlib.sha256(payload).hexdigest()}
+                self.replace_manifest(json.dumps(value))
+                with zipfile.ZipFile(self.archive,'a') as output:
+                    for name in paths:output.writestr('data/'+name,payload)
+                reads=[]
+                def observed_open(archive,name,*args,**kwargs):
+                    filename=name.filename if isinstance(name,zipfile.ZipInfo) else name
+                    if filename.startswith('data/'):reads.append(filename)
+                    return original_open(archive,name,*args,**kwargs)
+                original=self.archive.read_bytes()
+                with patch.object(zipfile.ZipFile,'open',observed_open):
+                    with self.assertRaisesRegex(ValueError,'충돌'):restore(self.archive,self.root/'restored')
+                self.assertEqual(reads,[]);self.assertFalse((self.root/'restored').exists())
+                self.assertEqual(self.archive.read_bytes(),original)
     def test_deeply_nested_manifest_is_rejected_without_publishing(self):
         depth=max(20000,sys.getrecursionlimit()*20)
         self.replace_manifest('{"version":1,"files":{},"extra":'+'['*depth+'0'+']'*depth+'}')

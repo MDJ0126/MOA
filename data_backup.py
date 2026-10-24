@@ -185,7 +185,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             if not isinstance(manifest, dict) or type(manifest.get('version')) is not int or manifest['version'] != 1 or not isinstance(manifest.get('files'), dict):
                 raise ValueError('지원하지 않는 백업입니다.')
             files = manifest['files']
-            if len({name.casefold() for name in files}) != len(files):
+            file_names={name.casefold() for name in files}
+            if len(file_names) != len(files):
                 raise ValueError('대소문자가 충돌하는 경로입니다.')
             if set(names) != {'manifest.json'} | {'data/' + name for name in files}:
                 raise ValueError('백업 목록과 실제 파일이 다릅니다.')
@@ -198,6 +199,9 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
                 if z.getinfo('data/'+name).file_size!=expected['size']:
                     raise ValueError('백업 파일 크기가 목록과 다릅니다.')
                 checked_paths[name]=checked_backup_path(name,aliases)
+                parts=checked_paths[name]
+                if any('/'.join(parts[:index]).casefold() in file_names for index in range(1,len(parts))):
+                    raise ValueError('백업 파일과 디렉터리 경로가 충돌합니다.')
             for name, expected in files.items():
                 parts=checked_paths[name]
                 path = staged.joinpath(*parts)
