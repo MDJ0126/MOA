@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 import zipfile
-from app import Store
+from app import Store,Worker
 from data_backup import backup, restore, inspect_backup
 from setup_config import read_setting, write_setting
 from supervisor import acquire
@@ -15,6 +15,22 @@ from unittest.mock import patch
 
 
 class BackupTests(unittest.TestCase):
+    def test_restored_queue_waits_for_resume_and_executes_once(self):
+        tid=self.store.add('queued before backup','demo')
+        with self.store.connect() as connection:
+            frozen=connection.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0]
+        backup(self.source,self.archive);destination=self.root/'restored';restore(self.archive,destination)
+        restored=Store(destination);worker=Worker(restored,demo_only=True)
+        self.assertFalse(worker.tick());self.assertFalse((destination/'tasks'/tid).exists())
+        with restored.connect() as connection:
+            self.assertEqual(connection.execute('SELECT execution_plan FROM tasks WHERE id=?',(tid,)).fetchone()[0],frozen)
+            self.assertEqual(connection.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0],'queued')
+        restored.control('resume');self.assertTrue(worker.tick());self.assertFalse(worker.tick())
+        with restored.connect() as connection:
+            self.assertEqual(connection.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0],'completed')
+            roles=[row[0] for row in connection.execute("SELECT capability FROM messages WHERE task_id=? AND kind='start' ORDER BY seq",(tid,))]
+        self.assertEqual(roles,json.loads(frozen)['pipeline'])
+        self.assertTrue((destination/'tasks'/tid/'artifacts.zip').is_file())
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)
         self.root = Path(self.temp.name)
