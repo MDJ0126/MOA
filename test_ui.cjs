@@ -206,6 +206,18 @@ async function main(){
  w.fetch=async(path,options)=>{if(path==='/api/control')sourceControls++;if(path==='/api/diagnostics')return new Response(JSON.stringify({checks:[{id:'application_sources',label:'서버 변경 적용',state:'restart',detail:'서버 시작 뒤 파일이 바뀌었습니다.'}],disk_free_gib:10,scope:'fixture'}),{headers:{'Content-Type':'application/json'}});return sourceFetch(path,options)};
  click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('재시작 필요'),'restart required diagnostic');assert.equal(sourceControls,0);w.fetch=sourceFetch;
 
+ for(const failed of [false,true]){
+ let finish,count=0;const diagnostic=detail=>({checks:[{label:'fixture',state:'ready',detail}],disk_free_gib:10,scope:'fixture'});
+ w.fetch=(path,options)=>{if(path!=='/api/diagnostics')return sourceFetch(path,options);if(count++===0)return new Promise(resolve=>{finish=()=>resolve(new Response(JSON.stringify(failed?{error:'old diagnostic error'}:diagnostic('old diagnostic')),{status:failed?503:200}))});return Promise.resolve(new Response(JSON.stringify(diagnostic('latest diagnostic'))))};
+ const pending=w.testInstallation('diagnose');await w.testInstallation('diagnose');finish();await assert.doesNotReject(pending);
+ assert.ok(d.querySelector('#installationChecks').textContent.includes('latest diagnostic'));assert.ok(!d.querySelector('#installationChecks').textContent.includes('old diagnostic'));w.fetch=sourceFetch;
+ }
+ for(const failed of [false,true]){
+ let finish,count=0;const health=scope=>({queue:{counts:{}},worker:{thread_alive:true},scope});
+ w.fetch=(path,options)=>{if(path==='/api/diagnostics')return Promise.resolve(new Response(JSON.stringify({checks:[],disk_free_gib:10,scope:'latest fixture'})));if(path!=='/api/health')return sourceFetch(path,options);if(count++===0)return new Promise(resolve=>{finish=()=>resolve(new Response(JSON.stringify(failed?{error:'old health error'}:health('old health')),{status:failed?503:200}))});return Promise.resolve(new Response(JSON.stringify(health('latest health'))))};
+ const pending=w.testInstallation('diagnose');await until(()=>finish,'old health request');await w.testInstallation('diagnose');finish();await pending;
+ const text=d.querySelector('#installationChecks').textContent;assert.ok(text.includes('latest health'));assert.ok(!text.includes('old health'));assert.ok(!text.includes('운영 관측 정보를 읽지 못했습니다'));w.fetch=sourceFetch;
+ }
  click('[data-action="list-backups"]');await until(()=>d.querySelector('#backupResult').textContent.includes('개 백업'),'backup list');
  const installationFetch=w.fetch;
  w.fetch=async(path,options)=>path==='/api/backups/inspect'?new Response(JSON.stringify({files:3,tasks:2,messages:7,restored:false}),{headers:{'Content-Type':'application/json'}}):installationFetch(path,options);
