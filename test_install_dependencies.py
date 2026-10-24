@@ -7,17 +7,51 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
+from install_dependencies import prune_metadata,install
 
 
 class InstallDependencyTests(unittest.TestCase):
+    def metadata(self,target,folder,name,version):
+        path=target/folder;path.mkdir(parents=True)
+        (path/'METADATA').write_text(f'Name: {name}\nVersion: {version}\n',encoding='utf-8')
+        return path
+
+    def test_cleanup_preserves_current_other_packages_and_module_files(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            target=Path(temporary)/'libs'
+            old=self.metadata(target,'fixture-1.dist-info','fixture','1')
+            current=self.metadata(target,'fixture-2.dist-info','fixture','2')
+            other=self.metadata(target,'other-1.dist-info','other','1')
+            module=target/'fixture.py';module.write_bytes(b'current module')
+            prune_metadata(target,{'install':[{'metadata':{'name':'fixture','version':'2'}}]})
+            self.assertFalse(old.exists());self.assertTrue(current.exists());self.assertTrue(other.exists());self.assertEqual(module.read_bytes(),b'current module')
+
+    def test_linked_old_metadata_is_rejected_without_removing_any_folder(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            root=Path(temporary);target=root/'libs'
+            old=self.metadata(target,'fixture-1.dist-info','fixture','1')
+            outside=root/'private';outside.write_bytes(b'preserve')
+            os.link(outside,old/'RECORD')
+            with self.assertRaisesRegex(ValueError,'링크'):prune_metadata(target,{'install':[{'metadata':{'name':'fixture','version':'2'}}]})
+            self.assertTrue(old.exists());self.assertEqual(outside.read_bytes(),b'preserve')
+
+    def test_failed_install_never_prunes_existing_metadata(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            root=Path(temporary)
+            old=self.metadata(root/'runtime/pythonlibs','fixture-1.dist-info','fixture','1')
+            with patch('install_dependencies.ROOT',root),patch('install_dependencies.subprocess.run',return_value=subprocess.CompletedProcess([],7)),patch('install_dependencies.prune_metadata') as cleanup:
+                self.assertEqual(install(['fixture']),7);cleanup.assert_not_called()
+            self.assertTrue(old.exists());self.assertEqual(list((root/'runtime').glob('dependency-*')),[])
+
     def test_reinstall_updates_existing_project_dependency_without_network(self):
         shell=shutil.which('pwsh') or shutil.which('powershell')
         if not shell:self.skipTest('PowerShell unavailable')
         root=Path(__file__).parent
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             project=Path(temporary)
-            for name in ('Install.ps1','PythonRuntime.ps1'):shutil.copyfile(root/name,project/name)
+            for name in ('Install.ps1','PythonRuntime.ps1','install_dependencies.py'):shutil.copyfile(root/name,project/name)
             for version in ('1.0','2.0'):
                 distribution=f'moa_install_fixture-{version}.dist-info'
                 files={'moa_install_fixture/__init__.py':f'VERSION = "{version}"\n'.encode(),
@@ -34,5 +68,7 @@ class InstallDependencyTests(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 installed=project/'runtime/pythonlibs/moa_install_fixture/__init__.py'
                 self.assertEqual(installed.read_text(),f'VERSION = "{version}"\n')
+                metadata=list((project/'runtime/pythonlibs').glob('moa_install_fixture-*.dist-info'))
+                self.assertEqual([path.name for path in metadata],[distribution])
                 self.assertFalse((project/'models').exists())
 
