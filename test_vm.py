@@ -14,6 +14,17 @@ from supervisor import write_status
 from setup_config import SettingsConflict,read_setting
 
 class VMTests(unittest.TestCase):
+    def test_failed_mouse_input_attempts_only_button_release(self):
+        for phase in ('press','release'):
+            for release_fails in (False,True):
+                with self.subTest(phase=phase,release_fails=release_fails):
+                    effects=[None]+([None] if phase=='release' else [])+[ValueError('original mouse failure'),OSError('cleanup unavailable') if release_fails else None]
+                    with patch.object(self.vm,'qmp',side_effect=effects) as qmp,patch('vm_runtime.time.sleep'):
+                        with self.assertRaisesRegex(ValueError,'original mouse failure'):self.vm.action({'action':'click','x':10,'y':20,'button':'left'})
+                    self.assertEqual(qmp.call_count,len(effects))
+                    self.assertEqual(qmp.call_args_list[-1].args[1]['events'],[{'type':'btn','data':{'down':False,'button':'left'}}])
+                    presses=[event for call in qmp.call_args_list for event in call.args[1]['events'] if event['type']=='btn' and event['data']['down']]
+                    self.assertEqual(len(presses),1)
     def test_failed_key_input_attempts_release_without_replaying_down(self):
         for action,keys in (({'action':'key','keys':['ctrl','alt','t']},['t','alt','ctrl']),({'action':'text','text':'?'},['slash','shift'])):
             for release_fails in (False,True):

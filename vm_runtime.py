@@ -387,9 +387,10 @@ class VM:
             events=[{'type':'abs','data':{'axis':axis,'value':action[axis]}} for axis in ('x','y')]
             self.qmp('input-send-event',{'events':events})
             time.sleep(.05)
-            for down in (True,False):
-                self.qmp('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':action['button']}}]})
-                time.sleep(.1)
+            with self.release_input_on_error([{'type':'btn','data':{'down':False,'button':action['button']}}]):
+                for down in (True,False):
+                    self.qmp('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':action['button']}}]})
+                    time.sleep(.1)
         elif kind=='wait':time.sleep(action['seconds'])
 
     @contextmanager
