@@ -17,6 +17,17 @@ class VMAdmissionTests(unittest.TestCase):
         write_setting(self.store,'vm',{**DEFAULT,'enabled':True})
     def task(self,tid):
         with self.store.connect() as c:return dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
+    def test_input_failure_cleanup_never_replays_task_and_next_local_work_runs(self):
+        actions=[{'role':'planner','action':'key','keys':['ctrl','t']},{'role':'planner','action':'text','text':'?'},{'role':'planner','action':'click','x':10,'y':20}]
+        for action in actions:
+            with self.subTest(action=action):
+                tid=self.store.add('failed guest input','demo',environment='vm',vm_actions=[action]);next_id=self.store.add('next local task','demo')
+                effects=([None] if action['action']=='click' else [])+[TimeoutError('input reply lost'),None]
+                with patch.object(self.worker.vm,'_start'),patch.object(self.worker.vm,'capture'),patch.object(self.worker.vm,'qmp',side_effect=effects) as qmp,patch('vm_runtime.time.sleep'),patch('app.Demo.run') as backend:
+                    self.worker.tick();backend.assert_not_called();self.assertEqual(qmp.call_count,len(effects))
+                self.assertEqual(self.task(tid)['status'],'failed');self.assertIn('자동 재시도하지 않습니다',self.task(tid)['error']);self.assertIsNone(self.worker.vm.owner_record())
+                self.worker.tick();self.assertEqual(self.task(next_id)['status'],'completed')
+                self.assertFalse(self.worker.tick());self.assertEqual(self.task(tid)['status'],'failed')
     def test_saved_click_default_is_applied_before_any_input(self):
         tid=self.store.add('legacy click default','demo',environment='vm',vm_actions=[{'role':'planner','action':'click','x':10,'y':20}])
         task=self.task(tid);plan=json.loads(task['execution_plan']);del plan['environment']['actions'][0]['button']
