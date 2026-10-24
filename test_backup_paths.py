@@ -39,6 +39,28 @@ class BackupPathConsistencyTests(unittest.TestCase):
         folder=self.source/'tasks/task-one/workspace';folder.mkdir(parents=True);(folder/'example.py').write_bytes(b'answer=42\n')
         backup(self.source,self.archive);restore(self.archive,self.root/'restored')
         self.assertEqual((self.root/'restored/tasks/task-one/workspace/example.py').read_bytes(),b'answer=42\n')
+    def test_file_growth_during_read_does_not_publish_backup(self):
+        candidate=self.source/'result.txt';candidate.write_bytes(b'original')
+        original_open=Path.open;handles=[]
+        class ChangingReader:
+            def __init__(self,stream):self.stream=stream;self.changed=False
+            def __enter__(self):return self
+            def __exit__(self,*args):self.stream.close()
+            def fileno(self):return self.stream.fileno()
+            def read(self,size):
+                value=self.stream.read(size)
+                if not self.changed:
+                    self.changed=True
+                    with original_open(candidate,'ab') as writer:writer.write(b' changed')
+                return value
+        def changing_open(path,*args,**kwargs):
+            stream=original_open(path,*args,**kwargs)
+            if path==candidate:handles.append(stream);return ChangingReader(stream)
+            return stream
+        with patch.object(Path,'open',changing_open):
+            with self.assertRaisesRegex(ValueError,'변경'):backup(self.source,self.archive)
+        self.assertFalse(self.archive.exists());self.assertTrue(all(handle.closed for handle in handles))
+        self.assertEqual(candidate.read_bytes(),b'original changed')
     def test_nonportable_archive_names_are_rejected_before_writing(self):
         backup(self.source,self.archive)
         with zipfile.ZipFile(self.archive) as original:

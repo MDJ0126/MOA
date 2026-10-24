@@ -145,6 +145,12 @@ def backup(source, output):
                                 raise ValueError('백업 파일이 읽기 시작 중 변경되었습니다.')
                             with z.open('data/'+name,'w',force_zip64=True) as stored:
                                 while block:=stream.read(CHUNK_SIZE):stored.write(block);digest.update(block);size+=len(block)
+                            finished=os.fstat(stream.fileno());current=actual.lstat()
+                            # Windows path and handle ctime can describe different
+                            # timestamps; compare content metadata shared by both.
+                            signature=lambda info:(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
+                            if not valid(finished) or not valid(current) or size!=initial.st_size or any(signature(info)!=signature(initial) for info in (opened,finished,current)):
+                                raise ValueError('백업 파일 내용이 읽기 중 변경되었습니다. 파일 저장을 마친 뒤 다시 백업하세요.')
                         files[name] = {'size':size,'sha256':digest.hexdigest()}
                 z.writestr('manifest.json', json.dumps({'version': 1, 'files': files}, ensure_ascii=False))
             # Exclusive creation prevents another backup being overwritten.
