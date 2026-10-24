@@ -1,7 +1,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.MOA_JSDOM||'../runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2],sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#settings/team',runScripts:'outside-only',pretendToBeVisual:true});
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#settings/team',runScripts:'outside-only',pretendToBeVisual:true});
 const w=dom.window,d=w.document,requests=[];let sent=null;
 w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};
 w.fetch=async(path,options={})=>{
@@ -12,7 +12,7 @@ w.fetch=async(path,options={})=>{
 };
 async function until(fn){for(let i=0;i<150;i++){if(fn())return;await sleep(25)}throw Error('Team recovery DOM timeout: '+d.querySelector('#toast').textContent)}
 (async()=>{try{
- w.eval(fs.readFileSync('ui.js','utf8'));await until(()=>d.querySelector('#teamSaveState').textContent.includes('원문을 보관')&&!d.querySelector('#onboarding').hidden);
+ w.eval(fs.readFileSync('src/web/ui.js','utf8'));await until(()=>d.querySelector('#teamSaveState').textContent.includes('원문을 보관')&&!d.querySelector('#onboarding').hidden);
  assert.equal(sent,null,'opening recovery view must not save');assert.equal(d.querySelector('#onboarding').hidden,false);
  d.querySelector('[data-preset="light"]').click();d.querySelector('#saveTeam').click();
  await until(()=>d.querySelector('#teamSaveState').textContent==='저장됨'&&d.querySelector('#onboarding').hidden);

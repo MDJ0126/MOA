@@ -11,9 +11,10 @@ import unittest
 class StartScriptExitTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(dir=Path(__file__).parent.parent);self.root=Path(self.temp.name)/'project with spaces';self.root.mkdir()
-        for name in ('Start.ps1','PythonRuntime.ps1'):shutil.copyfile(Path(__file__).parent.parent/name,self.root/name)
+        (self.root/'scripts').mkdir();(self.root/'src').mkdir()
+        for name in ('Start.ps1','scripts/PythonRuntime.ps1'):shutil.copyfile(Path(__file__).parent.parent/name,self.root/name)
         stub="import json,os,sys\nprint(json.dumps({'entry':os.path.basename(__file__),'args':sys.argv[1:]}))\nsys.exit(int(os.environ['MOA_TEST_EXIT']))\n"
-        for name in ('app.py','supervisor.py'):(self.root/name).write_text(stub,encoding='utf-8')
+        for name in ('app.py','supervisor.py'):(self.root/'src'/name).write_text(stub,encoding='utf-8')
         self.shells=list(dict.fromkeys(path for name in ('pwsh','powershell') if (path:=shutil.which(name))))
         if not self.shells:self.skipTest('PowerShell unavailable')
     def tearDown(self):self.temp.cleanup()

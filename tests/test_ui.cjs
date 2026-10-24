@@ -2,7 +2,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.MOA_JSDOM||'../runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2];
-const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
 const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
 const requests=[];let slackSaved=null,setupFailures=1,docFailure=false,loseTaskResponse=true,exported=null;
 w.URL.createObjectURL=blob=>{exported=blob;return 'blob:unit-test'};w.URL.revokeObjectURL=()=>{};
@@ -17,7 +17,7 @@ w.fetch=async(path,options={})=>{
  if(path==='/api/setup/slack'){slackSaved=body;return new Response(JSON.stringify({...body,connections:body.connections.map(c=>({id:c.id,agent_id:c.agent_id,has_bot_token:true,has_app_token:true}))}),{headers:{'Content-Type':'application/json'}})}
  return fetch(base+path,options);
 };
-w.eval(fs.readFileSync('ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testInstallation=manageInstallation;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testOpenTask=openTask;window.testLoadArtifacts=loadArtifacts;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
+w.eval(fs.readFileSync('src/web/ui.js','utf8')+'\nwindow.waitRow=taskRow;window.waitNotice=retryNotice;window.testInstallation=manageInstallation;window.testAPI=api;window.testBackupRecovery=recoverBackupRequest;window.testRefresh=refresh;window.testVMStatus=renderVMStatus;window.testLoadTasks=loadTasks;window.testOpenTask=openTask;window.testLoadArtifacts=loadArtifacts;window.testLoadDoc=loadDoc;window.testResetDocs=()=>{docs=[]};');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('Timed out: '+description+' | '+d.querySelector('#toast').textContent)}
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}

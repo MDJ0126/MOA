@@ -1,10 +1,24 @@
+# 개발·검증 안내
+
+명령은 저장소 루트에서 실행합니다. 일반 사용자는 `Install.ps1`, `Start.ps1`, `Stop.ps1`과 [프로젝트 소개](../README.md)를 확인해 주세요.
+
+| 폴더 | 내용 |
+| --- | --- |
+| `src/` | 앱·설치·실행 소스, `web/` 화면 파일 |
+| `tools/` | 검증·진단·촬영·장시간 실행 도구 |
+| `scripts/` | PowerShell 내부 보조 스크립트 |
+| `tests/` | Python·DOM 회귀 테스트 |
+| `docs/development/` | 요구사항·개선 기준·개발 기록 |
+
+데이터·모델·런타임·백업은 기존처럼 루트의 `data/`, `models/`, `runtime/`, `backups/`를 사용하며 Git에는 포함하지 않습니다.
+
 # 로컬 순차 멀티 에이전트
 
-지속 고도화는 [CONTINUOUS_GOAL.md](../CONTINUOUS_GOAL.md)에서 추적합니다. 개별 검증 묶음의 통과율은 전체 제품 완성도를 뜻하지 않습니다.
+지속 고도화는 [CONTINUOUS_GOAL.md](development/CONTINUOUS_GOAL.md)에서 추적합니다. 개별 검증 묶음의 통과율은 전체 제품 완성도를 뜻하지 않습니다.
 
 ## 모델 없이 먼저 체험하기
 
-Python 3.11 이상을 준비한 뒤 `./Start.ps1 -Demo`로 시작하고 http://127.0.0.1:8767 에 접속하세요. 종료는 `./Stop.ps1 -Port 8767`입니다. 스크립트 실행이 어려우면 `python app.py --demo`를 사용할 수 있습니다. 운영 data와 별도인 data-demo에 저장하며 실제 AI·VM·Slack 연결은 차단합니다. 데모는 샘플 결과를 만드는 흐름 체험입니다. 실제 AI 업무에는 아래 모델 설치와 일반 Start.ps1 실행이 필요합니다.
+Python 3.11 이상을 준비한 뒤 `./Start.ps1 -Demo`로 시작하고 http://127.0.0.1:8767 에 접속하세요. 종료는 `./Stop.ps1 -Port 8767`입니다. 스크립트 실행이 어려우면 `python src/app.py --demo`를 사용할 수 있습니다. 운영 data와 별도인 data-demo에 저장하며 실제 AI·VM·Slack 연결은 차단합니다. 데모는 샘플 결과를 만드는 흐름 체험입니다. 실제 AI 업무에는 아래 모델 설치와 일반 Start.ps1 실행이 필요합니다.
 
 ## 설정과 기록
 
@@ -36,7 +50,7 @@ http://127.0.0.1:8765 에서 워크스페이스·작업과 대화·팀 설정·�
 
 기본 모드는 **실제 AI**입니다. 현재 기본 모델은 Qwen2.5-Coder-7B-Instruct Q4_K_M, 런타임은 llama.cpp b11669 CPU x64입니다. 공식 SHA-256과 대조했으며 출처·크기·해시는 `models/installed.json`에 있습니다. CPU 4스레드, 컨텍스트 4096, 동시 추론 1개이며 GPU 가속은 사용하지 않습니다. 설정은 `config.json`입니다. 앞서 시험한 1.5B 파일과 실패 기록도 보존했습니다.
 
-다시 설치하려면 Python 3.11 이상으로 `install_model.py`를 실행합니다. 모델 약 4.68GB와 런타임 약 20MB를 다운로드하며 시스템 PATH는 변경하지 않습니다.
+다시 설치하려면 Python 3.11 이상으로 `src/install_model.py`를 실행합니다. 모델 약 4.68GB와 런타임 약 20MB를 다운로드하며 시스템 PATH는 변경하지 않습니다.
 
 모델 다운로드가 끊기면 같은 명령을 다시 실행해 `.part` 파일부터 이어받습니다. 서버 범위 응답을 확인하고 공식 SHA-256 검증 후 정식 파일로 교체합니다. 해시가 다른 부분 파일은 제거하며 기존 정식 파일은 보존합니다. 설치 잠금으로 중복 실행을 차단하고 런타임은 파일별로 완성한 뒤 교체합니다. 재설치·수리 전에는 앱과 감시 관리자를 정상 종료하세요. 파일 전체에 대한 일괄 롤백은 제공하지 않으며 실패 후 같은 명령으로 재실행할 수 있습니다.
 
@@ -69,7 +83,7 @@ C#·C++·문서 등은 파일 확장자에 맞춰 생성하도록 연결했지�
 
 ## 지속 실행·복구와 제한
 
-`supervisor.py`가 모델과 작업 서버를 실행하고 비정상 종료 시 지연 후 재시작합니다. 자동 복구 작업은 저장된 현재 역할부터 재시도하며 반복 충돌은 최대 3회 이후 중단으로 남깁니다. 통신 오류도 제한적으로 재시도합니다. 통지 전송 실패 때문에 완료된 개발 작업을 다시 실행하지 않습니다.
+`src/supervisor.py`가 모델과 작업 서버를 실행하고 비정상 종료 시 지연 후 재시작합니다. 자동 복구 작업은 저장된 현재 역할부터 재시도하며 반복 충돌은 최대 3회 이후 중단으로 남깁니다. 통신 오류도 제한적으로 재시도합니다. 통지 전송 실패 때문에 완료된 개발 작업을 다시 실행하지 않습니다.
 
 기본 감독 실행은 추론 캐시를 64MiB로 제한하고 30초 유휴 시 모델을 메모리에서 내립니다. 다음 요청에서 모델을 다시 로딩하므로 지연이 생깁니다. 모델 서버는 loopback 전용이며 data/model.key의 로컬 토큰을 사용합니다. 이 토큰은 보고서·Git에 포함하지 않습니다.
 
@@ -81,7 +95,7 @@ C#·C++·문서 등은 파일 확장자에 맞춰 생성하도록 연결했지�
 
 ## 확장과 VM
 
-`integrations.py`에는 확장 계약이 있고 `slack_service.py`에는 SDK Socket Mode 수신·영속 inbox·중복 제거·스레드 매핑·보고 재시도가 있습니다. 엔진은 미연결이며 실제 Slack 계정은 설정 후 연결합니다. 네트워크가 전송 직후 끊기면 메시지 중복 가능성이 남으므로 외부 exactly-once를 보장하지 않습니다.
+`src/integrations.py`에는 확장 계약이 있고 `src/slack_service.py`에는 SDK Socket Mode 수신·영속 inbox·중복 제거·스레드 매핑·보고 재시도가 있습니다. 엔진은 미연결이며 실제 Slack 계정은 설정 후 연결합니다. 네트워크가 전송 직후 끊기면 메시지 중복 가능성이 남으므로 외부 exactly-once를 보장하지 않습니다.
 
 Ollama backend도 남아 있지만 기본은 llama.cpp입니다. Ollama는 별도로 설치해야 하며 `app.py --model <이름> --model-url <Ollama주소>`로 직접 실행한 뒤 Ollama 모드를 선택합니다. 데모 모드는 AI 없이 시스템 흐름만 시험합니다.
 
@@ -89,29 +103,29 @@ PC는 i5-12400F / RAM 15.82GiB / GTX 970 4GiB / Windows Core로 확인했습니�
 
 ## 검증
 
-Python으로 `-m unittest -v`, `verify_system.py`를 실행하면 단위/HTTP 검증을 수행합니다. `verify_real.py`는 실행 중인 모델·감시 관리자에 실제 작업을 등록합니다. `verify_recovery.py`는 이 프로젝트의 작업 서버를 실제로 종료시켜 자동 복구를 확인합니다. 단위·HTTP 검증 명령은 컴퓨터 유즈나 브라우저 시각 검증을 실행하지 않습니다.
+Python으로 `-m unittest -v`, `tools/verify_system.py`를 실행하면 단위/HTTP 검증을 수행합니다. `tools/verify_real.py`는 실행 중인 모델·감시 관리자에 실제 작업을 등록합니다. `tools/verify_recovery.py`는 이 프로젝트의 작업 서버를 실제로 종료시켜 자동 복구를 확인합니다. 단위·HTTP 검증 명령은 컴퓨터 유즈나 브라우저 시각 검증을 실행하지 않습니다.
 
 ## 미니멀 고도화 검증
 
-이번 개선의 12개 완료 기준과 검증 범위는 [REFINEMENT.md](../REFINEMENT.md)에 있습니다. `verify_refinement.py`는 임시 서버에서 635개 작업·405개 기록의 검색과 페이지 이동을 검증합니다. `verify_ui.py`는 jsdom으로 사용자 흐름과 오류 복구를 검사하며 브라우저·컴퓨터 유즈를 열지 않습니다. 실제 화면의 시각적 렌더링 검증과 실제 Slack 인증은 별도 항목입니다.
+이번 개선의 12개 완료 기준과 검증 범위는 [REFINEMENT.md](development/REFINEMENT.md)에 있습니다. `tools/verify_refinement.py`는 임시 서버에서 635개 작업·405개 기록의 검색과 페이지 이동을 검증합니다. `tools/verify_ui.py`는 jsdom으로 사용자 흐름과 오류 복구를 검사하며 브라우저·컴퓨터 유즈를 열지 않습니다. 실제 화면의 시각적 렌더링 검증과 실제 Slack 인증은 별도 항목입니다.
 
 ## 선택적 공유 VM
 
-`./Install.ps1 -WithVM`으로 QEMU와 Xorg 데스크톱 ISO를 프로젝트 내부에 준비합니다. 팀 설정 → 작업 환경에서 한 VM의 RAM·CPU·부팅 이미지·네트워크를 설정하고, 작업별로 공유 VM 화면을 선택합니다. 여러 에이전트가 OS 잠금으로 한 화면을 순차 사용하고 단계 전후 화면을 기록합니다. 현재 모델은 비전 모델이 아니므로 지정한 입력 동작을 실행합니다. 파일 생성과 Python 검증은 호스트에서 수행합니다. 자세한 사용법은 앱의 공유 VM 가이드, 검증 기준은 [VM_GOAL.md](../VM_GOAL.md)를 확인하세요.
+`./Install.ps1 -WithVM`으로 QEMU와 Xorg 데스크톱 ISO를 프로젝트 내부에 준비합니다. 팀 설정 → 작업 환경에서 한 VM의 RAM·CPU·부팅 이미지·네트워크를 설정하고, 작업별로 공유 VM 화면을 선택합니다. 여러 에이전트가 OS 잠금으로 한 화면을 순차 사용하고 단계 전후 화면을 기록합니다. 현재 모델은 비전 모델이 아니므로 지정한 입력 동작을 실행합니다. 파일 생성과 Python 검증은 호스트에서 수행합니다. 자세한 사용법은 앱의 공유 VM 가이드, 검증 기준은 [VM_GOAL.md](development/VM_GOAL.md)를 확인하세요.
 
 ## 화면 비조작 고도화
 
-팀·Slack 설정 저장 충돌 감지, 요청 ID 기반 작업 중복 방지, 취소 후 전달 차단, 담당자 지시 필터링, 대화 JSON 내보내기와 수동 재시도 이력 보존을 추가했습니다. Slack 설정과 DPAPI 암호문은 같은 SQLite 트랜잭션에 저장합니다. 구체적인 범위와 비화면 검증 기준은 [NON_SCREEN_GOAL.md](../NON_SCREEN_GOAL.md)에 있습니다. VM 화면 동작을 이번 고도화에서 실행 검증한 것으로 간주하지 않습니다.
+팀·Slack 설정 저장 충돌 감지, 요청 ID 기반 작업 중복 방지, 취소 후 전달 차단, 담당자 지시 필터링, 대화 JSON 내보내기와 수동 재시도 이력 보존을 추가했습니다. Slack 설정과 DPAPI 암호문은 같은 SQLite 트랜잭션에 저장합니다. 구체적인 범위와 비화면 검증 기준은 [NON_SCREEN_GOAL.md](development/NON_SCREEN_GOAL.md)에 있습니다. VM 화면 동작을 이번 고도화에서 실행 검증한 것으로 간주하지 않습니다.
 
 ## 소스 전용 재현 검증
 
-Python 3.11 이상으로 `python -m unittest -q`, `python verify_system.py`를 실행합니다. DOM 검증에는 jsdom 27.4.0과 호환되는 Node.js 20.19+ (20.x), 22.12+ (22.x) 또는 24+가 필요합니다. 앱 실행에는 Node가 필요하지 않습니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python verify_ui.py`, `python verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로를 우선 확인하고, 미지정이면 PATH와 기존 번들 중 실행·버전 확인을 통과한 경로를 사용합니다. 잘못된 명시 경로를 자동으로 바꾸지는 않습니다. 선택한 실행기는 절대 경로로 전달합니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `verify_vm_live.py`는 별도입니다.
+Python 3.11 이상으로 `python -m unittest -q`, `python tools/verify_system.py`를 실행합니다. DOM 검증에는 jsdom 27.4.0과 호환되는 Node.js 20.19+ (20.x), 22.12+ (22.x) 또는 24+가 필요합니다. 앱 실행에는 Node가 필요하지 않습니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund jsdom@27.4.0`으로 프로젝트 내부에 준비한 뒤 `python tools/verify_ui.py`, `python tools/verify_refinement.py`를 실행합니다. Node는 `MOA_NODE` 환경 변수의 실행 파일 경로를 우선 확인하고, 미지정이면 PATH와 기존 번들 중 실행·버전 확인을 통과한 경로를 사용합니다. 잘못된 명시 경로를 자동으로 바꾸지는 않습니다. 선택한 실행기는 절대 경로로 전달합니다. 이 명령들은 브라우저·VM 화면 조작을 실행하지 않습니다. VM 실기동용 `tools/verify_vm_live.py`는 별도입니다.
 
-`python verify_clean_install.py --ui`는 모델·VM·앱 데이터를 복사하지 않은 임시 소스에서 전체 단위 테스트, HTTP 순차 실행·산출물·백업·재시작, DOM·대량 기록 검증을 실행하고 정리합니다. 호스트 Python과 Node/jsdom 검증 도구는 사용합니다. Node 경로는 MOA_NODE, jsdom 경로는 MOA_JSDOM으로 지정할 수 있습니다. UI 검증을 제외하려면 --ui를 생략하세요. VM 설정 테스트의 ISO는 부팅할 수 없는 임시 검증 파일이며 실제 VM을 실행하지 않습니다.
+`python tools/verify_clean_install.py --ui`는 모델·VM·앱 데이터를 복사하지 않은 임시 소스에서 전체 단위 테스트, HTTP 순차 실행·산출물·백업·재시작, DOM·대량 기록 검증을 실행하고 정리합니다. 호스트 Python과 Node/jsdom 검증 도구는 사용합니다. Node 경로는 MOA_NODE, jsdom 경로는 MOA_JSDOM으로 지정할 수 있습니다. UI 검증을 제외하려면 --ui를 생략하세요. VM 설정 테스트의 ISO는 부팅할 수 없는 임시 검증 파일이며 실제 VM을 실행하지 않습니다.
 
 
 ### 사용 가이드 화면 갱신
 
 가이드는 실제 앱 스크린샷과 핵심 3단계로 구성합니다. 설치 명령·예외 설명은 접힌 상세에 둡니다. 개인 작업·토큰이 없는 체험용 데이터로 촬영하며 Slack·모델·VM에는 연결하지 않습니다.
 
-스크린샷을 다시 만들 때는 개발 도구 Playwright 1.62.1과 설치된 Chrome/Edge를 사용합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund playwright@1.62.1`로 준비하고 `MOA_BROWSER`에 설치된 브라우저 실행 파일 경로를 지정한 뒤 `python capture_guides.py`를 실행하세요. 별도 Playwright 경로는 `MOA_PLAYWRIGHT`로 지정합니다. 이 명령은 새 헤드리스 프로필을 사용하고 기존 브라우저 창·프로필은 조작하지 않습니다. 결과는 `docs/screenshots`, 소스/이미지 해시와 촬영 시각은 그 안의 `manifest.json`에 저장합니다. 새 OS·실제 AI·Slack·VM 화면 업무 성공 검증을 대신하지 않습니다.
+스크린샷을 다시 만들 때는 개발 도구 Playwright 1.62.1과 설치된 Chrome/Edge를 사용합니다. `npm install --prefix runtime/ui-tests --no-audit --no-fund playwright@1.62.1`로 준비하고 `MOA_BROWSER`에 설치된 브라우저 실행 파일 경로를 지정한 뒤 `python tools/capture_guides.py`를 실행하세요. 별도 Playwright 경로는 `MOA_PLAYWRIGHT`로 지정합니다. 이 명령은 새 헤드리스 프로필을 사용하고 기존 브라우저 창·프로필은 조작하지 않습니다. 결과는 `docs/screenshots`, 소스/이미지 해시와 촬영 시각은 그 안의 `manifest.json`에 저장합니다. 새 OS·실제 AI·Slack·VM 화면 업무 성공 검증을 대신하지 않습니다.

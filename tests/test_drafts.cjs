@@ -7,14 +7,14 @@ async function main(){
  await post('/api/control',{action:'pause'});
  const setup=await(await fetch(base+'/api/setup')).json();await post('/api/setup/team',{...setup.presets[1],expected_updated:setup.team.updated||0});
  const a=(await post('/api/tasks',{title:'Draft A',mode:'demo'})).id,b=(await post('/api/tasks',{title:'Draft B',mode:'demo'})).id;
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;w.fetch=(path,options)=>fetch(base+path,options);
  const timers=new Set(),set=w.setTimeout.bind(w),clear=w.clearTimeout.bind(w);let closing=false;
  w.setTimeout=(fn,ms,...args)=>{if(closing)return 0;const id=set(()=>{timers.delete(id);fn(...args)},ms);timers.add(id);return id};w.clearTimeout=id=>{timers.delete(id);clear(id)};
  const input=(selector,value,event='input')=>{const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))};
  const click=selector=>{assert.ok(d.querySelector(selector),selector);d.querySelector(selector).click()};
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error('Draft timeout: '+label+' / '+d.querySelector('#toast').textContent)}
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;window.draftOlder=loadOlderLogs;window.draftBreakPlan=()=>{const t=state.tasks.find(t=>t.id===activeTask)||workTasks.find(t=>t.id===activeTask);t.execution_plan='{broken';t.execution_plan_unavailable=true;renderModal()};window.draftRestore=refresh;window.draftDemo=()=>{state.demo_only=true;renderHome()};boot();`));
+ w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.draftPending++;try{return await fn(...args)}finally{window.draftPending--}};window.draftPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.draftOpen=openTask;window.draftOlder=loadOlderLogs;window.draftBreakPlan=()=>{const t=state.tasks.find(t=>t.id===activeTask)||workTasks.find(t=>t.id===activeTask);t.execution_plan='{broken';t.execution_plan_unavailable=true;renderModal()};window.draftRestore=refresh;window.draftDemo=()=>{state.demo_only=true;renderHome()};boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length===2,'boot');
   await w.draftOpen(a);input('#messageText','A 작성 중');input('#messageRecipient','checker','change');click('[data-action="close-modal"]');

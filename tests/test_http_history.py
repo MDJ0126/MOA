@@ -21,7 +21,7 @@ class HistoryHTTPTests(unittest.TestCase):
             with store.connect() as c:c.execute("CREATE TRIGGER reject_log BEFORE INSERT ON messages WHEN NEW.kind='instruction' BEGIN SELECT RAISE(ABORT,'private-database-detail'); END")
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             log=stack.enter_context((Path(temporary)/'server.log').open('wb'))
-            process=subprocess.Popen([sys.executable,str(root/'app.py'),'--data',str(data),'--port',str(port),'--model','','--model-url','http://127.0.0.1:0'],stdout=log,stderr=log)
+            process=subprocess.Popen([sys.executable,str(root/'src/app.py'),'--data',str(data),'--port',str(port),'--model','','--model-url','http://127.0.0.1:0'],stdout=log,stderr=log)
             base=f'http://127.0.0.1:{port}'
             def post(path,value):
                 request=urllib.request.Request(base+path,json.dumps(value).encode(),{'Content-Type':'application/json','X-Local-Agent':'1'})

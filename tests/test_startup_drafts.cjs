@@ -3,13 +3,13 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.MOA_JSDOM||'../runtime/ui-tests/node_modules/jsdom');
 const base=process.argv[2],sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function scenario(failedPath){
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window,d=w.document,requests=[];let fail=true,retry,inflight=0;
  w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};
  const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>ms===3000?(retry=fn,0):ms===2500?0:timeout(fn,ms,...args);
  w.fetch=async(path,options={})=>{requests.push({path,method:options.method||'GET'});if(path===failedPath&&fail){fail=false;throw Error('Isolated startup interruption')}inflight++;try{return await fetch(base+path,options)}finally{inflight--}};
  try{
-  w.eval(fs.readFileSync('ui.js','utf8'));
+  w.eval(fs.readFileSync('src/web/ui.js','utf8'));
   for(let i=0;i<100&&!retry;i++)await sleep(25);
   assert.ok(retry,'startup interruption schedules retry');assert.ok(d.querySelector('#agent-name-0'));
   function input(selector,value,event='input'){const field=d.querySelector(selector);assert.ok(field,selector);field.value=value;field.dispatchEvent(new w.Event(event,{bubbles:true}))}

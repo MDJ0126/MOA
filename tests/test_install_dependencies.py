@@ -61,7 +61,8 @@ class InstallDependencyTests(unittest.TestCase):
         root=Path(__file__).parent.parent
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             project=Path(temporary)/'프로젝트 with spaces';project.mkdir()
-            for name in ('Install.ps1','PythonRuntime.ps1','install_dependencies.py','supervisor.py','app_lifecycle.py'):shutil.copyfile(root/name,project/name)
+            (project/'scripts').mkdir();(project/'src').mkdir()
+            for name in ('Install.ps1','scripts/PythonRuntime.ps1','src/install_dependencies.py','src/supervisor.py','src/app_lifecycle.py'):shutil.copyfile(root/name,project/name)
             for version in ('1.0','2.0'):
                 distribution=f'moa_install_fixture-{version}.dist-info'
                 files={'moa_install_fixture/__init__.py':f'VERSION = "{version}"\n'.encode(),

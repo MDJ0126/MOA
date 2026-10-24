@@ -1,6 +1,6 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.MOA_JSDOM||'../runtime/ui-tests/node_modules/jsdom');
-const base=process.argv[2],dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#work',runScripts:'outside-only',pretendToBeVisual:true});
+const base=process.argv[2],dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#work',runScripts:'outside-only',pretendToBeVisual:true});
 const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};w.fetch=(path,options)=>fetch(base+path,options);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}throw Error('DOM history timeout: '+d.querySelector('#toast').textContent)}
@@ -8,7 +8,7 @@ async function until(fn){for(let i=0;i<150;i++){if(fn())return;await sleep(50)}t
 const timers=new Set(),originalSetTimeout=w.setTimeout.bind(w),originalClearTimeout=w.clearTimeout.bind(w);let closing=false;
 w.setTimeout=(fn,ms,...args)=>{if(closing)return 0;const id=originalSetTimeout(()=>{timers.delete(id);fn(...args)},ms);timers.add(id);return id};
 w.clearTimeout=id=>{timers.delete(id);originalClearTimeout(id)};
-w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`let pendingActions=0;
+w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`let pendingActions=0;
 const tracked=fn=>async(...args)=>{pendingActions++;try{return await fn(...args)}finally{pendingActions--}};
 busy=tracked(busy);poll=tracked(poll);boot=tracked(boot);window.pendingActions=()=>pendingActions;boot();`));
 async function main(){

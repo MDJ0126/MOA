@@ -70,7 +70,7 @@ store.deliver=exit_after_handoff
 Worker(store).tick()
 raise SystemExit(74)
 """
-        result=subprocess.run([sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent),self.temp.name],capture_output=True,timeout=20)
+        result=subprocess.run([sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent/'src'),self.temp.name],capture_output=True,timeout=20)
         self.assertEqual(result.returncode,73,result.stderr.decode(errors='replace'))
         with self.store.connect() as c:self.assertEqual(tuple(c.execute('SELECT status,stage FROM tasks WHERE id=?',(self.tid,)).fetchone()),('running',0))
         self.assertEqual(self.count('planner'),0)

@@ -6,7 +6,7 @@ async function main(){
  const bad=await fetch(base+'/api/vbox/plan',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({profile:{location:'shared_vm',target_os:'windows'},iso:'../outside.iso'})});assert.equal(bad.status,400);
  const realStatus=await(await fetch(base+'/api/vbox/setup')).json();assert.equal(realStatus.preparation,null);assert.equal(realStatus.restoration,null);
  const absent=await fetch(base+'/api/vbox/recovery',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({action:'inspect'})});assert.equal(absent.status,200);assert.equal((await absent.json()).can_clear,false);
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
  let prepareCount=0,late=null,delay=false,record=null,recoveryAllowed=false,clearCount=0,storedPlan=null,planCount=0,restoration=null;
  w.fetch=(path,options)=>{
@@ -21,7 +21,7 @@ async function main(){
  const input=(id,value,event='change')=>{const node=d.querySelector('#'+id);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))};
  const click=action=>d.querySelector('[data-action="'+action+'"]').click();
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error(label+' / '+d.querySelector('#toast').textContent)}
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.vboxPending++;try{return await fn(...args)}finally{window.vboxPending--}};window.vboxPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
+ w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.vboxPending++;try{return await fn(...args)}finally{window.vboxPending--}};window.vboxPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vboxOptions').open,false);
   input('profileLocation','shared_vm');input('profileOS','windows');input('vboxIso','runtime/install.iso','input');click('plan-vbox');

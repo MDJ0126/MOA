@@ -23,7 +23,7 @@
 
 - [개발·검증 안내](development.md) — 실행 명령, 저장 구조, 복구와 제한
 - [테스트 실행 안내](../tests/README.md) — Python·DOM 테스트 위치와 실행 명령
-- [개선 검증 기준](../REFINEMENT.md)
-- [공유 VM 검증 기준](../VM_GOAL.md)
-- [화면 비조작 검증 기준](../NON_SCREEN_GOAL.md)
-- [지속 고도화 기록](../CONTINUOUS_GOAL.md)
+- [개선 검증 기준](development/REFINEMENT.md)
+- [공유 VM 검증 기준](development/VM_GOAL.md)
+- [화면 비조작 검증 기준](development/NON_SCREEN_GOAL.md)
+- [지속 고도화 기록](development/CONTINUOUS_GOAL.md)

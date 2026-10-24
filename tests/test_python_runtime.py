@@ -9,7 +9,7 @@ class PythonRuntimeTests(unittest.TestCase):
     def run_helper(self,path):
         shell=shutil.which('pwsh') or shutil.which('powershell')
         if not shell:self.skipTest('PowerShell unavailable')
-        helper=Path(__file__).parent.parent/'PythonRuntime.ps1'
+        helper=Path(__file__).parent.parent/'scripts/PythonRuntime.ps1'
         quoted=lambda value:"'"+str(value).replace("'","''")+"'"
         command="$ErrorActionPreference='Stop'; . "+quoted(helper)+"; Resolve-MoaPython -PythonPath "+quoted(path)
         return subprocess.run([shell,'-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)

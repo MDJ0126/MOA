@@ -26,7 +26,7 @@ class DemoLaunchTests(unittest.TestCase):
     @contextmanager
     def launch(self,powershell=False,data=None):
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        command=[sys.executable,str(self.project/'app.py'),'--demo','--port',str(port)]
+        command=[sys.executable,str(self.project/'src/app.py'),'--demo','--port',str(port)]
         if data is not None:command+=['--data',str(data)]
         if powershell:
             shell=shutil.which('pwsh') or shutil.which('powershell')

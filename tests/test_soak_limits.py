@@ -17,7 +17,7 @@ class SoakLimitTests(unittest.TestCase):
         clock=[0.0];child=MagicMock();child.process.pid=123;child.process.poll.return_value=None;child.status.return_value={}
         requests=[]
         def freeze(destination):
-            destination.mkdir();(destination/'app.py').write_text('test',encoding='utf-8');return {'app.py':'frozen'}
+            destination.mkdir();(destination/'src').mkdir();(destination/'src/app.py').write_text('test',encoding='utf-8');return {'app.py':'frozen'}
         def response(request,**kwargs):
             requests.append(request.full_url)
             if request.full_url.endswith('/api/health'):
@@ -53,7 +53,7 @@ class SoakLimitTests(unittest.TestCase):
         result,requests=self.simulate(max_bytes=1)
         self.assertEqual(result['status'],'failed');self.assertIn('byte budget',result['error'])
         self.assertGreater(result['observed_bytes'],1);self.assertFalse(requests)
-        self.assertTrue((self.root/'run/source/app.py').is_file())
+        self.assertTrue((self.root/'run/source/src/app.py').is_file())
 
     def test_only_named_verified_workspace_is_pruned(self):
         tasks=self.root/'data/tasks';target=tasks/'0123456789ab';target.mkdir(parents=True);(target/'report').write_bytes(b'abc')

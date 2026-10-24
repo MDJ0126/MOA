@@ -22,7 +22,7 @@ class HistoryRecoveryTests(unittest.TestCase):
             with store.connect() as c:c.execute("UPDATE tasks SET execution_plan=?,status='interrupted' WHERE id=?",(raw,tid))
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             with (root/'server.log').open('wb') as log:
-                process=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(store.root),'--port',str(port),'--model','','--model-url','http://127.0.0.1:0'],stdout=log,stderr=log)
+                process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--data',str(store.root),'--port',str(port),'--model','','--model-url','http://127.0.0.1:0'],stdout=log,stderr=log)
                 try:
                     base='http://127.0.0.1:'+str(port)
                     for _ in range(100):

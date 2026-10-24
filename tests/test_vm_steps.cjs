@@ -7,7 +7,7 @@ async function main(){
  await post('/api/control',{action:'pause'});
  const before=(await(await fetch(base+'/api/vm')).json()).config;
  await post('/api/setup/vm',{...before,enabled:true,expected_updated:before.updated||0});
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;w.fetch=(path,options)=>fetch(base+path,options);
  const timers=new Set(),set=w.setTimeout.bind(w),clear=w.clearTimeout.bind(w);let closing=false;
  w.setTimeout=(fn,ms,...args)=>{if(closing)return 0;const id=set(()=>{timers.delete(id);fn(...args)},ms);timers.add(id);return id};w.clearTimeout=id=>{timers.delete(id);clear(id)};
@@ -15,7 +15,7 @@ async function main(){
  const click=selector=>{assert.ok(d.querySelector(selector),selector);d.querySelector(selector).click()};
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error('VM editor timeout: '+label+' / '+d.querySelector('#toast').textContent)}
  const raw=()=>JSON.parse(d.querySelector('#vmActions').value||'[]');
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.stepPending++;try{return await fn(...args)}finally{window.stepPending--}};window.stepPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.stepRefresh=refresh;boot();`));
+ w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.stepPending++;try{return await fn(...args)}finally{window.stepPending--}};window.stepPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.stepRefresh=refresh;boot();`));
  let taskId;
  try{
   await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vmActionOptions').hidden,true);

@@ -38,7 +38,7 @@ class BackupHttpBoundaryTests(unittest.TestCase):
                 req=urllib.request.Request(base+path,None if data is None else json.dumps(data).encode(),{'Content-Type':'application/json','X-Local-Agent':'1'})
                 with urllib.request.urlopen(req,timeout=3) as response:return json.load(response)
             with (root/'app.log').open('wb') as log:
-                process=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(store.root),'--port',str(port)],stdout=log,stderr=log)
+                process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--data',str(store.root),'--port',str(port)],stdout=log,stderr=log)
                 try:
                     for _ in range(100):
                         try:request('/api/health');break

@@ -58,7 +58,7 @@ class HardwareFailureHttpTests(unittest.TestCase):
     def test_setup_stays_available_and_auto_vm_is_held_with_missing_measurements(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent.parent) as temporary:
             root=Path(temporary);project=root/'source';freeze(project)
-            source=project/'setup_config.py'
+            source=project/'src/setup_config.py'
             source.write_text(source.read_text(encoding='utf-8')+'''
 _fixture_hardware=hardware
 def hardware():
@@ -70,7 +70,7 @@ def hardware():
             def request(path):
                 with urllib.request.urlopen(f'http://127.0.0.1:{port}'+path,timeout=3) as response:return json.load(response)
             with (root/'app.log').open('wb') as log:
-                child=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(root/'data'),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                child=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--data',str(root/'data'),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                 try:
                     for _ in range(100):
                         try:request('/api/health');break

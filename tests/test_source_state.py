@@ -25,7 +25,7 @@ class RunningSourceHttpTests(unittest.TestCase):
             def request(path):
                 with urllib.request.urlopen(base+path,timeout=3) as response:return json.load(response)
             with (root/'app.log').open('wb') as log:
-                process=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(store.root),'--port',str(port)],stdout=log,stderr=log)
+                process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--data',str(store.root),'--port',str(port)],stdout=log,stderr=log)
                 try:
                     for _ in range(100):
                         try:health=request('/api/health');break
@@ -33,7 +33,7 @@ class RunningSourceHttpTests(unittest.TestCase):
                             if process.poll() is not None:self.fail('isolated app exited')
                             time.sleep(.05)
                     else:self.fail('isolated app readiness timeout')
-                    source=project/'environment_profiles.py';original=source.read_bytes();source.write_bytes(original+b'\n# pending source update\n')
+                    source=project/'src/environment_profiles.py';original=source.read_bytes();source.write_bytes(original+b'\n# pending source update\n')
                     result=request('/api/diagnostics')
                     check=next((c for c in result['checks'] if c['id']=='application_sources'),None)
                     self.assertIsNotNone(check);self.assertEqual(check['state'],'restart')
@@ -42,7 +42,7 @@ class RunningSourceHttpTests(unittest.TestCase):
                     self.assertEqual(request('/api/health')['app']['pid'],process.pid)
                     source.write_bytes(original)
                     self.assertEqual(request('/api/diagnostics')['source_status']['state'],'matching')
-                    (project/'ui.css').write_text('/* frontend update only */')
+                    (project/'src/web/ui.css').write_text('/* frontend update only */')
                     self.assertEqual(request('/api/diagnostics')['source_status']['state'],'matching')
                     source.unlink()
                     self.assertEqual(request('/api/diagnostics')['source_status']['state'],'unknown')

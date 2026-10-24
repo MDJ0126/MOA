@@ -235,7 +235,7 @@ try:
 except BusyVM:raise SystemExit(0)
 raise SystemExit(7)
 '''
-        args=[sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent),str(self.root)]
+        args=[sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent/'src'),str(self.root)]
         with vbox.project_lock():
             result=subprocess.run(args,capture_output=True,timeout=10)
             self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))

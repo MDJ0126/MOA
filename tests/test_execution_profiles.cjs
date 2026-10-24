@@ -6,13 +6,13 @@ async function post(path,value){const response=await fetch(base+path,{method:'PO
 async function main(){
  await post('/api/control',{action:'pause'});
  const original=(await(await fetch(base+'/api/setup')).json()).execution_profile;
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#home',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;w.fetch=(path,options)=>fetch(base+path,options);
  const timers=new Set(),set=w.setTimeout.bind(w),clear=w.clearTimeout.bind(w);let closing=false,taskId;
  w.setTimeout=(fn,ms,...args)=>{if(closing)return 0;const id=set(()=>{timers.delete(id);fn(...args)},ms);timers.add(id);return id};w.clearTimeout=id=>{timers.delete(id);clear(id)};
  function input(id,value){const node=d.querySelector('#'+id);node.value=value;node.dispatchEvent(new w.Event('change',{bubbles:true}))}
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error(label+' / '+d.querySelector('#toast').textContent)}
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.routingPending++;try{return await fn(...args)}finally{window.routingPending--}};window.routingPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
+ w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.routingPending++;try{return await fn(...args)}finally{window.routingPending--}};window.routingPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');
   input('profileOS','auto');input('profileLocation','host');d.querySelector('[data-action="save-profile"]').click();

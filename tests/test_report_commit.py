@@ -63,7 +63,7 @@ worker.package=exit_after_publication
 worker.tick()
 raise SystemExit(76)
 """
-        result=subprocess.run([sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent),self.temp.name],capture_output=True,timeout=20)
+        result=subprocess.run([sys.executable,'-I','-c',script,str(Path(__file__).resolve().parent.parent/'src'),self.temp.name],capture_output=True,timeout=20)
         self.assertEqual(result.returncode,75,result.stderr.decode(errors='replace'))
         plan={'agents':[{'id':role} for role in ('planner','developer','reviewer','reporter')]}
         self.assertTrue((self.store.root/'tasks'/self.tid/'report.json').is_file())

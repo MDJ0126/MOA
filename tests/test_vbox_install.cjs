@@ -4,7 +4,7 @@ const {JSDOM}=require(process.env.MOA_JSDOM||'../runtime/ui-tests/node_modules/j
 const base=process.argv[2],sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function main(){
  const invalid=await fetch(base+'/api/vbox/install',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Agent':'1'},body:JSON.stringify({})});assert.equal(invalid.status,400);
- const dom=new JSDOM(fs.readFileSync('dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
+ const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:base+'/#settings/environment',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,d=w.document;
  w.structuredClone=structuredClone;w.scrollTo=()=>{};w.AbortController=AbortController;
  const plan={id:'fake-install-plan',target_os:'windows',iso_detection:{unattended_supported:true,images:[{index:1,name:'Home'},{index:2,name:'<b>Pro</b>'}]}},record={id:plan.id,state:'prepared',name:'fake VM'};
  let requests=[],release=null;
@@ -13,7 +13,7 @@ async function main(){
  w.setTimeout=(fn,ms,...args)=>{if(closing)return 0;const id=set(()=>{timers.delete(id);fn(...args)},ms);timers.add(id);return id};w.clearTimeout=id=>{timers.delete(id);clear(id)};
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error(label+' / '+d.querySelector('#toast').textContent)}
  const input=(id,value)=>{const node=d.querySelector('#'+id);node.value=value;node.dispatchEvent(new w.Event('input',{bubbles:true}))};
- w.eval(fs.readFileSync('ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.installPending++;try{return await fn(...args)}finally{window.installPending--}};window.installPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.showInstallation=renderVboxInstall;window.installDirty=hasVboxInstallDraft;window.invalidateInstallation=hideVboxPlan;boot();`));
+ w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.installPending++;try{return await fn(...args)}finally{window.installPending--}};window.installPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.showInstallation=renderVboxInstall;window.installDirty=hasVboxInstallDraft;window.invalidateInstallation=hideVboxPlan;boot();`));
  try{
   await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vboxInstallOptions').hidden,true);
   w.showInstallation(plan,record,null);assert.equal(d.querySelector('#vboxInstallOptions').hidden,false);assert.equal(d.querySelector('#vboxInstallOptions').open,false);assert.equal(d.querySelector('#vboxGuestImage').value,'');assert.equal(d.querySelector('#vboxGuestImage b'),null);

@@ -80,7 +80,7 @@ class RestoredBackupRequestTests(unittest.TestCase):
 
     def test_cli_restore_publishes_separated_requests(self):
         target=self.root/'cli-restored'
-        result=subprocess.run([sys.executable,str(Path(__file__).parent.parent/'data_backup.py'),'restore',str(self.archive),str(target)],capture_output=True,timeout=15)
+        result=subprocess.run([sys.executable,str(Path(__file__).parent.parent/'src/data_backup.py'),'restore',str(self.archive),str(target)],capture_output=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))
         with Store(target).connect() as connection:
             self.assertEqual(connection.execute('SELECT count(*) FROM backup_requests').fetchone()[0],0)

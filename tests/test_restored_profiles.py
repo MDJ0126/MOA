@@ -58,7 +58,7 @@ class RestoredProfileTests(unittest.TestCase):
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         base='http://127.0.0.1:'+str(port)
         with (self.root/'server.log').open('wb') as log:
-            process=subprocess.Popen([sys.executable,str(project/'app.py'),'--demo','--data',str(restored.root),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--demo','--data',str(restored.root),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             def request(path,payload=None):
                 req=urllib.request.Request(base+path,None if payload is None else json.dumps(payload).encode(),{'Content-Type':'application/json','X-Local-Agent':'1'})
                 with urllib.request.urlopen(req,timeout=3) as response:return json.load(response)

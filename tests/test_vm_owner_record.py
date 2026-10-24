@@ -53,7 +53,7 @@ class VMOwnerHttpTests(_VMOwnerFixture):
             message=urllib.request.Request(f'http://127.0.0.1:{port}'+path,None if payload is None else json.dumps(payload).encode(),{'Content-Type':'application/json','X-Local-Agent':'1'})
             with urllib.request.urlopen(message,timeout=3) as response:return json.load(response,parse_constant=lambda value:self.fail('non-finite response'))
         with (Path(self.temp.name)/'server.log').open('wb') as log:
-            process=subprocess.Popen([sys.executable,str(project/'app.py'),'--data',str(self.store.root),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--data',str(self.store.root),'--port',str(port)],stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             try:
                 for _ in range(100):
                     try:request('/api/health');break

@@ -78,7 +78,7 @@ class StartupOwnershipTests(unittest.TestCase):
         project=self.root/'project';copy_sources(project)
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         with (self.root/'server.log').open('wb') as log:
-            process=subprocess.Popen([sys.executable,str(project/'app.py'),'--demo','--port',str(port)],stdout=log,stderr=log)
+            process=subprocess.Popen([sys.executable,str(project/'src/app.py'),'--demo','--port',str(port)],stdout=log,stderr=log)
             try:
                 base='http://127.0.0.1:'+str(port)
                 for _ in range(100):
