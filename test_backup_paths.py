@@ -25,6 +25,16 @@ class BackupPathConsistencyTests(unittest.TestCase):
         with patch.object(Path,'rglob',return_value=[database,database]):
             with self.assertRaisesRegex(ValueError,'중복'):backup(self.source,self.archive)
         self.assertFalse(self.archive.exists());self.assertTrue(database.is_file())
+    def test_file_replaced_at_open_is_not_copied_or_published(self):
+        candidate=self.source/'result.txt';candidate.write_bytes(b'expected')
+        outside=self.root/'outside.txt';outside.write_bytes(b'unrelated private file')
+        handle=outside.open('rb');original_open=Path.open
+        def swapped_open(path,*args,**kwargs):
+            return handle if path==candidate else original_open(path,*args,**kwargs)
+        with patch.object(Path,'open',swapped_open):
+            with self.assertRaisesRegex(ValueError,'변경'):backup(self.source,self.archive)
+        self.assertTrue(handle.closed);self.assertFalse(self.archive.exists())
+        self.assertEqual(candidate.read_bytes(),b'expected');self.assertEqual(outside.read_bytes(),b'unrelated private file')
     def test_normal_nested_paths_still_roundtrip(self):
         folder=self.source/'tasks/task-one/workspace';folder.mkdir(parents=True);(folder/'example.py').write_bytes(b'answer=42\n')
         backup(self.source,self.archive);restore(self.archive,self.root/'restored')

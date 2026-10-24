@@ -136,8 +136,15 @@ def backup(source, output):
                         checked_backup_path(name,aliases)
                         actual=snapshot if name=='state.sqlite3' else path
                         digest=hashlib.sha256();size=0
-                        with actual.open('rb') as stream,z.open('data/'+name,'w',force_zip64=True) as stored:
-                            while block:=stream.read(CHUNK_SIZE):stored.write(block);digest.update(block);size+=len(block)
+                        initial=actual.lstat()
+                        valid=lambda info:stat.S_ISREG(info.st_mode) and info.st_nlink==1 and not getattr(info,'st_file_attributes',0)&0x400
+                        if not valid(initial):raise ValueError('백업 파일이 검사 중 변경되었습니다.')
+                        with actual.open('rb') as stream:
+                            opened=os.fstat(stream.fileno());current=actual.lstat()
+                            if not valid(opened) or not valid(current) or (initial.st_dev,initial.st_ino)!=(opened.st_dev,opened.st_ino) or (opened.st_dev,opened.st_ino)!=(current.st_dev,current.st_ino):
+                                raise ValueError('백업 파일이 읽기 시작 중 변경되었습니다.')
+                            with z.open('data/'+name,'w',force_zip64=True) as stored:
+                                while block:=stream.read(CHUNK_SIZE):stored.write(block);digest.update(block);size+=len(block)
                         files[name] = {'size':size,'sha256':digest.hexdigest()}
                 z.writestr('manifest.json', json.dumps({'version': 1, 'files': files}, ensure_ascii=False))
             # Exclusive creation prevents another backup being overwritten.
