@@ -16,7 +16,15 @@
 
 Describe your task and completion criteria. MOA works through **plan → develop → validate → report** in order. Team members share a single local model, and conversations and deliverables are stored on your PC.
 
-**Workflow:** Task and completion criteria → Plan → Develop → Validate files and Python tests → Report and ZIP archive.
+<p align="center">
+  <img src="docs/assets/moa-office-androids.png" alt="MOA office team: a central coordinator directs android specialists in planning, development, validation, and reporting." width="960">
+</p>
+
+*An illustration of coordinated team roles. Agents take turns using one shared local model.*
+
+<p align="center">
+  <img src="docs/assets/moa-workflow.en.svg" alt="Task and completion criteria → Plan → Develop → Validate files and Python tests → Report and ZIP. One shared local model runs sequentially on your PC." width="960">
+</p>
 
 ## Quick start
 

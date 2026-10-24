@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
+  <title id="title">MOA workflow</title>
+  <desc id="desc">Enter a task and completion criteria, then plan, develop, validate, and report in sequence. The team shares one local model on your PC and produces files, reports, and ZIP archives.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="m1 1 3 3-3 3" fill="none" stroke="#b9978e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="960" height="300" rx="24" fill="#fff8f5"/>
+  <g font-family="Segoe UI, Malgun Gothic, sans-serif">
+    <text x="40" y="47" fill="#a64d38" font-size="12" font-weight="700" letter-spacing="3">MOA · LOCAL AGENT TEAM</text>
+    <text x="40" y="83" fill="#342b29" font-size="24" font-weight="700">Your task. One team. Step by step.</text>
+    <g fill="#fff" stroke="#eed9d2">
+      <rect x="40" y="115" width="166" height="82" rx="16"/>
+      <rect x="278" y="115" width="142" height="82" rx="16"/>
+      <rect x="444" y="115" width="142" height="82" rx="16"/>
+      <rect x="610" y="115" width="142" height="82" rx="16"/>
+      <rect x="776" y="115" width="142" height="82" rx="16"/>
+    </g>
+    <g stroke="#b9978e" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M218 156h44"/><path d="M426 156h12"/><path d="M592 156h12"/><path d="M758 156h12"/>
+    </g>
+    <g text-anchor="middle">
+      <text x="123" y="148" fill="#342b29" font-size="18" font-weight="700">Your task</text>
+      <text x="123" y="174" fill="#78635d" font-size="12">Goal + done criteria</text>
+      <g fill="#bd5138" font-size="18" font-weight="700">
+        <text x="349" y="148">01 Plan</text><text x="515" y="148">02 Develop</text><text x="681" y="148">03 Validate</text><text x="847" y="148">04 Report</text>
+      </g>
+      <g fill="#78635d" font-size="12">
+        <text x="349" y="174">Steps + criteria</text><text x="515" y="174">Create real files</text><text x="681" y="174">Files + Python tests</text><text x="847" y="174">Report + ZIP</text>
+      </g>
+    </g>
+    <path d="M294 219h608" stroke="#eed9d2" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="326" cy="253" r="4" fill="#e76f51"/>
+    <text x="340" y="258" fill="#78635d" font-size="14">Your PC · One local model · Sequential execution</text>
+  </g>
+</svg>
