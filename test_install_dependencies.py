@@ -60,7 +60,7 @@ class InstallDependencyTests(unittest.TestCase):
         if not shell:self.skipTest('PowerShell unavailable')
         root=Path(__file__).parent
         with tempfile.TemporaryDirectory(dir=root) as temporary:
-            project=Path(temporary)
+            project=Path(temporary)/'프로젝트 with spaces';project.mkdir()
             for name in ('Install.ps1','PythonRuntime.ps1','install_dependencies.py','supervisor.py','app_lifecycle.py'):shutil.copyfile(root/name,project/name)
             for version in ('1.0','2.0'):
                 distribution=f'moa_install_fixture-{version}.dist-info'
@@ -72,7 +72,7 @@ class InstallDependencyTests(unittest.TestCase):
                 wheel=project/f'moa_install_fixture-{version}-py3-none-any.whl'
                 with zipfile.ZipFile(wheel,'w') as archive:
                     for name,data in files.items():archive.writestr(name,data)
-                (project/'requirements.txt').write_text(str(wheel),encoding='utf-8')
+                (project/'requirements.txt').write_text(wheel.as_uri(),encoding='utf-8')
                 environment=dict(os.environ,MOA_PYTHON=sys.executable,PIP_NO_INDEX='1',PIP_CONFIG_FILE=os.devnull,PIP_DISABLE_PIP_VERSION_CHECK='1')
                 result=subprocess.run([shell,'-NoProfile','-NonInteractive','-File',str(project/'Install.ps1')],cwd=project,env=environment,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
