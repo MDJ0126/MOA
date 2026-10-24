@@ -10,9 +10,19 @@ import unittest
 from unittest.mock import patch
 import zipfile
 from install_dependencies import prune_metadata,install
+from supervisor import acquire
 
 
 class InstallDependencyTests(unittest.TestCase):
+    def test_busy_install_never_starts_pip_and_releases_for_next_attempt(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            root=Path(temporary);runtime=root/'runtime';runtime.mkdir()
+            with patch('install_dependencies.ROOT',root),patch('install_dependencies.subprocess.run',return_value=subprocess.CompletedProcess([],5)) as pip:
+                with acquire(runtime/'dependencies.lock'):
+                    with self.assertRaisesRegex(ValueError,'설치 중'):install(['fixture'])
+                    pip.assert_not_called()
+                self.assertEqual(install(['fixture']),5);pip.assert_called_once()
+                with acquire(runtime/'dependencies.lock'):pass
     def metadata(self,target,folder,name,version):
         path=target/folder;path.mkdir(parents=True)
         (path/'METADATA').write_text(f'Name: {name}\nVersion: {version}\n',encoding='utf-8')
@@ -51,7 +61,7 @@ class InstallDependencyTests(unittest.TestCase):
         root=Path(__file__).parent
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             project=Path(temporary)
-            for name in ('Install.ps1','PythonRuntime.ps1','install_dependencies.py'):shutil.copyfile(root/name,project/name)
+            for name in ('Install.ps1','PythonRuntime.ps1','install_dependencies.py','supervisor.py','app_lifecycle.py'):shutil.copyfile(root/name,project/name)
             for version in ('1.0','2.0'):
                 distribution=f'moa_install_fixture-{version}.dist-info'
                 files={'moa_install_fixture/__init__.py':f'VERSION = "{version}"\n'.encode(),

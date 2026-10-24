@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from supervisor import acquire
 
 ROOT=Path(__file__).resolve().parent
 
@@ -41,7 +42,9 @@ def install(arguments):
     target=runtime/'pythonlibs'
     if runtime.resolve()!=runtime or target.resolve()!=target:
         raise ValueError('프로젝트 내부의 독립된 연결 도구 폴더를 사용하세요.')
-    with tempfile.TemporaryDirectory(prefix='dependency-',dir=runtime) as temporary:
+    try:lease=acquire(runtime/'dependencies.lock')
+    except OSError:raise ValueError('연결 도구를 설치 중이거나 설치 잠금을 사용할 수 없습니다. 기존 설치가 끝난 뒤 다시 실행하세요.') from None
+    with lease,tempfile.TemporaryDirectory(prefix='dependency-',dir=runtime) as temporary:
         report=Path(temporary)/'install.json'
         result=subprocess.run([sys.executable,'-m','pip','install','--upgrade','--target',str(target),'--report',str(report),*arguments])
         if result.returncode:return result.returncode
