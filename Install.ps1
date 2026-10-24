@@ -2,14 +2,14 @@ param([switch]$DownloadModel,[switch]$WithVM)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PythonRuntime.ps1')
 $AgentPython = Resolve-MoaPython
-& $AgentPython -m pip install --target (Join-Path $PSScriptRoot 'runtime\pythonlibs') -r (Join-Path $PSScriptRoot 'requirements.txt')
+& $AgentPython -m pip install --upgrade --target (Join-Path $PSScriptRoot 'runtime\pythonlibs') -r (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Slack 연결 도구 설치 실패' }
 if ($DownloadModel) {
     & $AgentPython (Join-Path $PSScriptRoot 'install_model.py')
     if ($LASTEXITCODE -ne 0) { throw '모델 설치 실패' }
 }
 if ($WithVM) {
-    & $AgentPython -m pip install --target (Join-Path $PSScriptRoot 'runtime\pythonlibs') pycdlib==1.14.0
+    & $AgentPython -m pip install --upgrade --target (Join-Path $PSScriptRoot 'runtime\pythonlibs') pycdlib==1.14.0
     if ($LASTEXITCODE -ne 0) { throw 'VM ISO 구성 도구 설치 실패' }
     & $AgentPython (Join-Path $PSScriptRoot 'install_vm.py')
     if ($LASTEXITCODE -ne 0) { throw 'VM 런타임 설치 실패' }
