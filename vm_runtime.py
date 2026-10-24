@@ -354,21 +354,35 @@ class VM:
         if not path.is_file():raise ValueError('VM 화면 파일이 생성되지 않았습니다.')
         return path
 
+    @contextmanager
+    def release_input_on_error(self,events):
+        try:yield
+        except Exception:
+            # A lost reply leaves guest input state unknown. Never replay the
+            # press; attempt only release and preserve the original failure.
+            try:self.qmp('input-send-event',{'events':events})
+            except Exception:pass
+            raise
+
     def action(self,action):
         kind=action['action']
         if kind=='key':
             keys=action['keys']
-            for down,sequence in ((True,keys),(False,list(reversed(keys)))):
-                self.qmp('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}} for key in sequence]})
-                time.sleep(.15)
+            releases=[{'type':'key','data':{'down':False,'key':{'type':'qcode','data':key}}} for key in reversed(keys)]
+            with self.release_input_on_error(releases):
+                for down,sequence in ((True,keys),(False,list(reversed(keys)))):
+                    self.qmp('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}} for key in sequence]})
+                    time.sleep(.15)
         elif kind=='text':
             punctuation={' ':'spc','\n':'ret','\t':'tab','-':'minus','=':'equal','.':'dot',',':'comma','/':'slash','\\':'backslash',';':'semicolon',"'":'apostrophe','`':'grave','[':'bracket_left',']':'bracket_right'}
             shifted=dict(zip('!@#$%^&*()_+<>?:"~{}|','1234567890-=.,/;\'`[]\\'))
             for char in action['text']:
                 shift=char.isupper() or char in shifted;plain=shifted.get(char,char.lower());key=punctuation.get(plain,plain)
                 sequence=([('shift',True)] if shift else [])+[(key,True),(key,False)]+([('shift',False)] if shift else [])
-                self.qmp('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}} for key,down in sequence]})
-                time.sleep(.015)
+                releases=[{'type':'key','data':{'down':False,'key':{'type':'qcode','data':name}}} for name in ([key,'shift'] if shift else [key])]
+                with self.release_input_on_error(releases):
+                    self.qmp('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}} for key,down in sequence]})
+                    time.sleep(.015)
         elif kind=='click':
             events=[{'type':'abs','data':{'axis':axis,'value':action[axis]}} for axis in ('x','y')]
             self.qmp('input-send-event',{'events':events})

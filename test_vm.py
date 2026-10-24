@@ -14,6 +14,23 @@ from supervisor import write_status
 from setup_config import SettingsConflict,read_setting
 
 class VMTests(unittest.TestCase):
+    def test_failed_key_input_attempts_release_without_replaying_down(self):
+        for action,keys in (({'action':'key','keys':['ctrl','alt','t']},['t','alt','ctrl']),({'action':'text','text':'?'},['slash','shift'])):
+            for release_fails in (False,True):
+                with self.subTest(action=action,release_fails=release_fails):
+                    effects=[ValueError('original input failure'),OSError('release unavailable') if release_fails else None]
+                    with patch.object(self.vm,'qmp',side_effect=effects) as qmp,patch('vm_runtime.time.sleep'):
+                        with self.assertRaisesRegex(ValueError,'original input failure'):self.vm.action(action)
+                    self.assertEqual(qmp.call_count,2)
+                    released=qmp.call_args_list[-1].args[1]['events']
+                    self.assertEqual([event['data']['key']['data'] for event in released],keys)
+                    self.assertTrue(all(event['data']['down'] is False for event in released))
+    def test_failed_key_release_retries_only_release(self):
+        with patch.object(self.vm,'qmp',side_effect=[None,ValueError('release reply lost'),None]) as qmp,patch('vm_runtime.time.sleep'):
+            with self.assertRaisesRegex(ValueError,'release reply lost'):self.vm.action({'action':'key','keys':['ctrl','t']})
+        self.assertEqual(qmp.call_count,3)
+        self.assertTrue(all(event['data']['down'] for event in qmp.call_args_list[0].args[1]['events']))
+        for call in qmp.call_args_list[1:]:self.assertTrue(all(event['data']['down'] is False for event in call.args[1]['events']))
     def test_stale_settings_are_rejected_without_overwrite(self):
         self.vm.save(dict(DEFAULT,enabled=True,expected_updated=0))
         from vm_runtime import settings
