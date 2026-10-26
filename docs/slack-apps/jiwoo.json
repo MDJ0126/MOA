@@ -1,0 +1,45 @@
+{
+  "display_information": {
+    "name": "Jiwoo",
+    "description": "로컬 에이전트 팀에 업무를 지시하고 결과를 받습니다."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "jiwoo",
+      "always_online": false
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "im:write",
+        "im:history",
+        "channels:read",
+        "channels:history",
+        "groups:read",
+        "groups:history",
+        "files:read",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "message.channels",
+        "message.groups"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

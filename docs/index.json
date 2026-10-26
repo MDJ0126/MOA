@@ -43,5 +43,25 @@
     "id": "privacy",
     "title": "데이터와 저장 위치",
     "description": "로컬 기록·토큰·공유 범위"
+  },
+  {
+    "id": "resources",
+    "title": "프로그램·스킬·지시 사항",
+    "description": "설치 준비, 자동 추가와 팀별 지침"
+  },
+  {
+    "id": "tray",
+    "title": "시스템 트레이 실행",
+    "description": "아이콘·관리 창·백그라운드 종료"
+  },
+  {
+    "id": "windows-vm",
+    "title": "Windows VM 연결",
+    "description": "설치·명령 연결·지원 범위"
+  },
+  {
+    "id": "continuous-goals",
+    "title": "지속 목표와 아침 검토",
+    "description": "자동 업무 진행·결과 보관·승인과 부분 수정"
   }
 ]

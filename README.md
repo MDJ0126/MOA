@@ -83,3 +83,6 @@ Python tests run with your current user permissions; they are not isolated by an
 ## Prompt assistant and specialist roles
 
 Refine a request into six fields, review it, then apply it before assigning the task. Configure each agent’s specialist role in Team Settings. See the [usage guide (Korean)](docs/prompt-assistant.md).
+
+### Named Slack teammates
+Use **Add teammate bot** in MOA. Initial Slack authorization resumes the pending bot setup automatically; the official Slack CLI provisions names, profile icons and credentials without manual token copying. Teammates use separate bot identities, shared-channel recipient event receipts and authenticated image downloads before advancing guest work. Users communicate with each bot in individual DMs; Slack rejects bot-to-bot DMs with cannot_dm_bot. CLI login files are stored in a user/SYSTEM-only directory and excluded from backups; authorize again after restore. `tools/verify_slack_team_live.py --run` checks real Slack receipts and actual VM artifacts after authorization.
