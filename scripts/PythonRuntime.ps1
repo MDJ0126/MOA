@@ -1,9 +1,11 @@
-function Resolve-MoaPython {
+﻿function Resolve-MoaPython {
     param([string]$PythonPath = $env:MOA_PYTHON)
     $ExplicitPython = -not [string]::IsNullOrWhiteSpace($PythonPath)
     $Candidates = @()
     if ($ExplicitPython) { $Candidates += $PythonPath }
     else {
+        $Bundled = Join-Path (Split-Path $PSScriptRoot -Parent) 'runtime/python/python.exe'
+        if(Test-Path -LiteralPath $Bundled){$Candidates += $Bundled}
         $Command = Get-Command python -ErrorAction SilentlyContinue
         if ($Command) { $Candidates += $Command.Source }
         $Candidates += (Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe')

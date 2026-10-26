@@ -12,17 +12,23 @@ import subprocess
 import re
 import threading
 import time
+import organization
+import role_presets
 
 CAPABILITIES={'planner':'계획','developer':'개발','reviewer':'검증','reporter':'보고'}
-DEFAULT_AGENTS=[{'id':key,'name':label+' 담당','capabilities':[key],'instructions':''} for key,label in CAPABILITIES.items()]
+DEFAULT_AGENTS=[{'id':key,'name':{'planner':'하준','developer':'지우','reviewer':'서연','reporter':'도윤'}[key],'capabilities':[key],'instructions':''} for key,label in CAPABILITIES.items()]
+for a in DEFAULT_AGENTS:
+    a.update(rank={'planner':'팀장','developer':'과장','reviewer':'대리','reporter':'사원'}[a['id']],job_title=CAPABILITIES[a['id']],manager_id='' if a['id']=='planner' else 'planner')
 PRESETS=[
  {'id':'compact','name':'혼자서 가볍게','count':1,'tag':'최소 구성','description':'한 에이전트가 구현과 검증을 순서대로 맡습니다. 보고서는 자동 정리합니다.',
   'pipeline':['developer','reviewer'],'agents':[{'id':'maker','name':'메이커','capabilities':list(CAPABILITIES),'instructions':''}]},
  {'id':'light','name':'작은 협업 팀','count':2,'tag':'추천 시작점','description':'만드는 담당과 확인하는 담당을 나눕니다. 계획·구현·검증 후 자동 보고합니다.',
-  'pipeline':['planner','developer','reviewer'],'agents':[{'id':'builder','name':'빌더','capabilities':['planner','developer'],'instructions':''},{'id':'checker','name':'체커','capabilities':['reviewer','reporter'],'instructions':''}]},
+  'pipeline':['planner','developer','reviewer'],'agents':[{'id':'builder','name':'지우','capabilities':['planner','developer'],'instructions':''},{'id':'checker','name':'서연','capabilities':['reviewer','reporter'],'instructions':''}]},
  {'id':'standard','name':'역할마다 전문적으로','count':4,'tag':'전체 흐름','description':'계획·개발·검증·보고를 각각 맡깁니다. 네 역할이 차례로 실행됩니다.',
   'pipeline':list(CAPABILITIES),'agents':DEFAULT_AGENTS},
 ]
+DEFAULT_AGENTS[:]=[role_presets.enrich(a) for a in DEFAULT_AGENTS]
+for preset in PRESETS:preset['agents']=[role_presets.enrich(a) for a in preset['agents']]
 LOCK=threading.RLock()
 
 class SettingsConflict(ValueError):pass
@@ -86,7 +92,8 @@ def team_settings(store):
     default={'configured':False,'preset':'standard','agents':copy.deepcopy(DEFAULT_AGENTS),'pipeline':list(CAPABILITIES),'max_revisions':2}
     with store.connect() as c:row=c.execute("SELECT value FROM settings WHERE key='workspace'").fetchone()
     if not row:return default
-    try:return decode_team(row[0])
+    try:
+        value=decode_team(row[0]);value['agents']=[role_presets.enrich(a) for a in value['agents']];return value
     except TEAM_ERRORS:return {**default,'recovery_required':True,'recovery_token':setting_fingerprint(row[0]),'recovery_message':'저장된 팀 설정을 읽지 못했습니다. 구성을 확인하고 저장하면 원문을 보관하고 복구합니다.'}
 
 def validate_team(value):
@@ -99,12 +106,33 @@ def validate_team(value):
     if 'reporter' in pipeline and pipeline[-1]!='reporter':raise ValueError('보고는 마지막 단계여야 합니다.')
     ids=set();clean=[]
     for agent in agents:
-        if not isinstance(agent,dict) or any(not isinstance(agent.get(k,''),str) for k in ('id','name','instructions')):raise ValueError('팀원 이름과 지침은 문자열이어야 합니다.')
+        if not isinstance(agent,dict) or any(not isinstance(agent.get(k,''),str) for k in ('id','name','instructions','specialty','rank','job_title','manager_id')):raise ValueError('팀원 이름과 지침은 문자열이어야 합니다.')
         aid=agent.get('id','');name=agent.get('name','').strip();roles=agent.get('capabilities',[]);instructions=agent.get('instructions','').strip()
         if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}',aid) or aid in ids or aid in ('system','user'):raise ValueError('에이전트 ID는 중복되지 않는 영문 소문자로 설정하세요.')
         if not 1<=len(name)<=30 or not isinstance(roles,list) or not roles or any(not isinstance(r,str) or r not in CAPABILITIES for r in roles):raise ValueError('이름과 역할을 확인하세요.')
         if len(instructions)>2000:raise ValueError('추가 지침은 2,000자 이내로 입력하세요.')
-        ids.add(aid);clean.append({'id':aid,'name':name,'capabilities':list(dict.fromkeys(roles)),'instructions':instructions})
+        specialty=agent.get('specialty','').strip()
+        if len(specialty)>200:raise ValueError('전문 역할은 200자 이내로 입력하세요.')
+        ids.add(aid);clean.append({'id':aid,'name':name,'capabilities':list(dict.fromkeys(roles)),'instructions':instructions,**({'specialty':specialty} if specialty else {})})
+        for field,limit in (('rank',10),('job_title',20),('manager_id',32)):
+            text=agent.get(field,'').strip()
+            if len(text)>limit:raise ValueError('직급·담당 업무·보고 대상 길이를 확인하세요.')
+            if text:clean[-1][field]=text
+    for original,target in zip(agents,clean):
+        for key,limit in (('role_preset',40),('responsibilities',1600),('boundaries',1200)):
+            if key in original:
+                text=original[key]
+                if not isinstance(text,str) or len(text)>limit:raise ValueError('역할 프리셋·담당 업무·업무 범위 길이를 확인하세요.')
+                if key=='role_preset' and text and not re.fullmatch('[a-z][a-z0-9-]{0,39}',text):raise ValueError('역할 프리셋 ID 형식 오류')
+                target[key]=text.strip()
+        if 'work_kinds' in original:
+            kinds=original['work_kinds']
+            if not isinstance(kinds,list) or not kinds or any(not isinstance(k,str) or k not in role_presets.KINDS for k in kinds):raise ValueError('담당 가능한 업무를 한 개 이상 선택하세요.')
+            target['work_kinds']=list(dict.fromkeys(kinds))
+    for original,target in zip(agents,clean):
+        if original.get('gender') not in (None,'','male','female'):raise ValueError('썸네일 스타일을 확인하세요.')
+        if original.get('gender'):target['gender']=original['gender']
+    organization.validate(clean)
     if any(not any(role in a['capabilities'] for a in clean) for role in pipeline):raise ValueError('각 실행 단계에 담당자가 한 명 이상 필요합니다.')
     revisions=value.get('max_revisions',2)
     if isinstance(revisions,str) and re.fullmatch('[0-5]',revisions):revisions=int(revisions)
@@ -121,6 +149,8 @@ def save_team(store,value):
         if any(c['agent_id']!='shared' and c['agent_id'] not in available for c in slack.get('connections',[])):
             raise ValueError('삭제할 팀원에 Slack 봇이 연결되어 있습니다. 먼저 그 봇의 담당을 공유 팀 봇으로 변경하세요.')
     checked_write_setting(store,'workspace',clean,value)
+    import team_profiles
+    team_profiles.ensure_defaults(store)
     return clean
 
 def make_plan(store,tid):
@@ -200,8 +230,8 @@ def hardware():
     result['architecture']=platform.machine()
     result['cpu_used_percent']=cpu_usage(result['os'])
     ram=result['ram_gib']
-    result['recommended_preset']='compact' if ram is not None and ram<12 else 'light' if ram is None or ram<24 else 'standard'
-    result['recommendation_note']='총 RAM에 따른 시작 구성입니다. 실제 모델 속도와 메모리는 작업에 따라 달라집니다. 모든 프리셋은 순차 실행합니다.'
+    result['recommended_preset']='standard'
+    result['recommendation_note']='기본 팀은 계획·개발·검증·보고 담당 4명입니다. 모델 하나를 공유하며 모든 프리셋은 순차 실행합니다.'
     return result
 
 class Blob(ctypes.Structure):
@@ -272,7 +302,19 @@ def prepare_slack(store,value):
     if enabled and not (receive or notify):raise ValueError('지시 수신 또는 결과 보고를 하나 이상 선택하세요.')
     if enabled and receive and not users:raise ValueError('업무 지시를 허용할 Slack 멤버 ID를 한 명 이상 입력하세요.')
     if enabled and notify and not channel:raise ValueError('보고를 받을 채널 ID를 입력하세요.')
-    config={'enabled':bool(enabled),'receive':bool(receive),'notify':bool(notify),'channel':channel,'allowed_users':users,'connections':connections,'updated':time.time()}
+    collaboration=value.get('collaboration',False)
+    if not isinstance(collaboration,bool):raise ValueError('Slack 협업 설정은 참 또는 거짓이어야 합니다.')
+    team_dm=value.get('team_dm',False)
+    if not isinstance(team_dm,bool):raise ValueError('팀원 DM 설정은 참 또는 거짓이어야 합니다.')
+    channel_receipts=value.get('channel_receipts',False)
+    if not isinstance(channel_receipts,bool):raise ValueError('팀원 채널 수신 확인 설정 오류')
+    if enabled and collaboration and not (receive and notify):raise ValueError('Slack 협업은 지시 수신과 결과 전송을 모두 켜야 합니다.')
+    if enabled and team_dm:
+        if not collaboration:raise ValueError('팀원 DM에는 Slack 협업을 켜야 합니다.')
+        assigned={entry['agent_id'] for entry in connections}
+        if len(agents)<2 or 'shared' in assigned or not agents.issubset(assigned):raise ValueError('팀원 DM에는 팀원마다 별도 봇을 연결하세요. 공유 봇은 사용할 수 없습니다.')
+        if len({v.get('bot_token') for v in values.values()})!=len(connections):raise ValueError('각 팀원에게 서로 다른 봇 토큰을 연결하세요.')
+    config={'enabled':bool(enabled),'receive':bool(receive),'notify':bool(notify),'collaboration':collaboration,'team_dm':team_dm,'channel_receipts':channel_receipts,'channel':channel,'allowed_users':users,'connections':connections,'updated':time.time()}
     return config,values
 
 def save_slack(store,value):
@@ -292,8 +334,11 @@ def save_slack(store,value):
                 c.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(item,ensure_ascii=False)))
     return slack_settings(store)
 
-def manifest(name='Local Agent Team'):
+def manifest(name='jiwoo'):
+    bot_name={'지우':'jiwoo','서연':'seoyeon','하준':'hajun','도윤':'doyun'}.get(name)
+    if not bot_name:
+        bot_name=re.sub(r'[^a-z0-9_.-]+','-',name.lower()).strip('-')[:80] or 'person-'+hashlib.sha256(name.encode()).hexdigest()[:8]
     return {'display_information':{'name':name[:35],'description':'로컬 에이전트 팀에 업무를 지시하고 결과를 받습니다.'},
-            'features':{'bot_user':{'display_name':name[:35],'always_online':False},'app_home':{'messages_tab_enabled':True,'messages_tab_read_only_enabled':False}},
-            'oauth_config':{'scopes':{'bot':['app_mentions:read','chat:write','im:history','channels:read']}},
-            'settings':{'socket_mode_enabled':True,'event_subscriptions':{'bot_events':['app_mention','message.im']},'org_deploy_enabled':False,'token_rotation_enabled':False}}
+            'features':{'bot_user':{'display_name':bot_name,'always_online':False},'app_home':{'messages_tab_enabled':True,'messages_tab_read_only_enabled':False}},
+            'oauth_config':{'scopes':{'bot':['app_mentions:read','chat:write','im:write','im:history','channels:read','channels:history','groups:read','groups:history','files:read','files:write']}},
+            'settings':{'socket_mode_enabled':True,'event_subscriptions':{'bot_events':['app_mention','message.im','message.channels','message.groups']},'org_deploy_enabled':False,'token_rotation_enabled':False}}

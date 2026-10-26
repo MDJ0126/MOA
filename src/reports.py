@@ -9,6 +9,7 @@ import tempfile
 import time
 import zipfile
 from conversation import for_agent
+import deliverables
 
 LABELS={'planner':'계획','developer':'개발','reviewer':'검증','reporter':'보고'}
 STATES={'completed':'완료','failed':'확인 필요','interrupted':'중단됨','cancelled':'취소됨','queued':'대기 중','running':'진행 중'}
@@ -36,6 +37,14 @@ def markdown(report):
     if contract:
         lines.extend(['## 실행 대상',text(contract['target_os'])+' · '+text(contract['architecture'])+' · 현재 PC', 'Python 검사 범위입니다. 데모는 실행 테스트가 없으며 엔진·화면 동작은 이 결과로 검증하지 않습니다.'])
     if count is not None:lines.append(f'실행 테스트 수: {count}개')
+    quality=report.get('quality_review',{})
+    if quality.get('review_count'):
+        lines.extend(['## 리더 검토 기록',f'리더 검토 {quality["review_count"]}회 · 재검토 지시 {quality["recheck_count"]}회 · 반려 {quality["rejection_count"]}회 · 수정 {report["revision"]}회 · 담당자 검증 시도 {quality["reviewer_checks"]}회'])
+        for review in quality['rounds']:
+            lines.append('### '+str(review['round'])+'차 · '+{'approve':'최종 승인','revise':'반려·부분 수정 지시','recheck':'추가 재검토'}[review['decision']])
+            lines.append(text(review['reason']))
+            if review.get('instructions'):lines.append('재지시: '+text(review['instructions']))
+            for check in review['checks']:lines.append('- '+('통과' if check['passed'] else '수정 필요')+' · '+text(check['criterion'])+': '+text(check['evidence']))
     lines.extend(['## 담당 흐름',' → '.join(text(names.get(plan['assignment'][role],plan['assignment'][role]))+' · '+LABELS.get(role,role) for role in plan['pipeline']),
                   f'수정 회차: {report["revision"]}','## 담당자별 결과'])
     for row in report['history']:
@@ -115,11 +124,16 @@ def publish(folder,workspace,report):
         with zipfile.ZipFile(staged/'artifacts.zip','w',zipfile.ZIP_DEFLATED) as bundle:
             for source in sorted(staged.rglob('*')):
                 if source.is_file() and source!=staged/'artifacts.zip':bundle.write(source,source.relative_to(staged).as_posix())
+        user_files=deliverables.collect(workspace)
+        for name,body in user_files.items():
+            target=staged/'deliverables'/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body)
+        with zipfile.ZipFile(staged/'results.zip','w',zipfile.ZIP_DEFLATED) as bundle:
+            for name,body in user_files.items():bundle.writestr(name,body)
         publication={'report_id':report['report_id'],'files':{}}
         for source in staged.rglob('*'):
             if not source.is_file():continue
             name=source.relative_to(staged).as_posix()
-            if name.split('/')[0] in ('workspace','vm'):continue
+            if name.split('/')[0] in ('workspace','vm') and name not in ('workspace/research/image.jpg','workspace/research/image.png','workspace/research/sources.json','workspace/research/results.json'):continue
             publication['files'][name]={'bytes':source.stat().st_size,'sha256':hash_file(source)}
         # Build and hash-check the complete snapshot before exposing any new reports.
         for source in sorted(staged.rglob('*')):

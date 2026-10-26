@@ -1,0 +1,102 @@
+[
+  {
+    "id": "male-01",
+    "gender": "male",
+    "label": "남성 추천 1"
+  },
+  {
+    "id": "male-02",
+    "gender": "male",
+    "label": "남성 추천 2"
+  },
+  {
+    "id": "male-03",
+    "gender": "male",
+    "label": "남성 추천 3"
+  },
+  {
+    "id": "male-04",
+    "gender": "male",
+    "label": "남성 추천 4"
+  },
+  {
+    "id": "male-05",
+    "gender": "male",
+    "label": "남성 추천 5"
+  },
+  {
+    "id": "male-06",
+    "gender": "male",
+    "label": "남성 추천 6"
+  },
+  {
+    "id": "male-07",
+    "gender": "male",
+    "label": "남성 추천 7"
+  },
+  {
+    "id": "male-08",
+    "gender": "male",
+    "label": "남성 추천 8"
+  },
+  {
+    "id": "male-09",
+    "gender": "male",
+    "label": "남성 추천 9"
+  },
+  {
+    "id": "male-10",
+    "gender": "male",
+    "label": "남성 추천 10"
+  },
+  {
+    "id": "female-01",
+    "gender": "female",
+    "label": "여성 추천 1"
+  },
+  {
+    "id": "female-02",
+    "gender": "female",
+    "label": "여성 추천 2"
+  },
+  {
+    "id": "female-03",
+    "gender": "female",
+    "label": "여성 추천 3"
+  },
+  {
+    "id": "female-04",
+    "gender": "female",
+    "label": "여성 추천 4"
+  },
+  {
+    "id": "female-05",
+    "gender": "female",
+    "label": "여성 추천 5"
+  },
+  {
+    "id": "female-06",
+    "gender": "female",
+    "label": "여성 추천 6"
+  },
+  {
+    "id": "female-07",
+    "gender": "female",
+    "label": "여성 추천 7"
+  },
+  {
+    "id": "female-08",
+    "gender": "female",
+    "label": "여성 추천 8"
+  },
+  {
+    "id": "female-09",
+    "gender": "female",
+    "label": "여성 추천 9"
+  },
+  {
+    "id": "female-10",
+    "gender": "female",
+    "label": "여성 추천 10"
+  }
+]

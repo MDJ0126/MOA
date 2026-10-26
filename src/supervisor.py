@@ -13,6 +13,20 @@ from app_lifecycle import request_stop
 
 ROOT=Path(__file__).resolve().parent.parent
 
+def prepare_vm(data,config):
+    """Reserve an enabled guest before loading the CPU model; keep RAM checks."""
+    if not config.get('prestart_vm',False):return {'state':'disabled'}
+    from app import Store
+    from vm_runtime import VM,settings
+    store=Store(data)
+    if not settings(store).get('enabled'):return {'state':'disabled'}
+    try:
+        result=VM(store).start()
+        return {'state':'ready','result':result,'order':'before_model_start','observed_at':time.time()}
+    except (OSError,ValueError) as error:
+        # Keep the settings UI available when prerequisites are missing.
+        return {'state':'failed','error':str(error),'observed_at':time.time()}
+
 def write_status(path,status):
     """A transient Windows reader lock must not terminate managed processes."""
     for attempt in range(5):
@@ -131,9 +145,10 @@ def main():
         commands={
             'model':[str(runtime),'-m',str(model),'--host','127.0.0.1','--port','8766','--ctx-size',str(config['context_size']),
                      '--parallel','1','--threads',str(config['threads']),'--gpu-layers','0','--alias',config['model'],
-                     '--cache-ram','64','--sleep-idle-seconds','30','--api-key-file',str(keyfile)],
+                     '--cache-ram',str(config.get('cache_ram_mib',256)),'--sleep-idle-seconds',str(config.get('sleep_idle_seconds',300)),'--api-key-file',str(keyfile)],
             'app':[sys.executable,'-u',str(ROOT/'src/app.py'),'--model',config['model'],'--model-url',config['model_url']],
         }
+        write_status(data/'vm-prestart.json',prepare_vm(data,config))
         children={name:ManagedChild(name,command,ROOT,data) for name,command in commands.items()}
         started=time.time()
         def shutdown(*args):stop.touch()
@@ -153,7 +168,7 @@ def main():
             if app is not None and app.poll() is None:
                 try:
                     request_stop(ROOT,8765,expected_pid=app.pid)
-                    app.wait(timeout=250)
+                    app.wait(timeout=400)
                 except Exception:pass
             for child in children.values():child.close()
 

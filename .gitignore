@@ -14,3 +14,10 @@ venv/
 node_modules/
 backups/
 restored-data/
+
+# Local verification reports and test workspaces
+/reports/
+/tmp*/
+
+# Generated installers; publish release binaries separately from source
+/dist/

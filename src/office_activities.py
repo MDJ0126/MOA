@@ -1,0 +1,2 @@
+"""Allowed visual-only office activities; these never create real work."""
+OFFICE_ACTIVITY_IDS = ('window_view', 'window_stretch', 'water_plant', 'inspect_plant', 'read_book', 'write_note', 'phone_call', 'sort_papers', 'whiteboard', 'shoulder_roll', 'neck_stretch', 'side_stretch', 'deep_breath', 'wave_hello', 'browse_shelf', 'collect_print', 'drink_water', 'tidy_desk', 'office_pace', 'think_idea')

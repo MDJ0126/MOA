@@ -123,7 +123,7 @@ def backup(source, output):
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
                 for path in sorted(source.rglob('*')):
                     relative = path.relative_to(source)
-                    if relative.parts[0].casefold() == 'vm' or 'vbox-private' in tuple(p.casefold() for p in relative.parts) or relative.as_posix().casefold() in SKIP:
+                    if relative.parts[0].casefold() in ('vm','slack-auto') or 'vbox-private' in tuple(p.casefold() for p in relative.parts) or relative.as_posix().casefold() in SKIP:
                         continue
                     if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
                         raise ValueError('링크가 포함된 데이터는 백업하지 않습니다.')
@@ -246,6 +246,8 @@ def restore(archive, destination, max_bytes=10 * 1024**3):
             for table in ('outbox','slack_inbox'):
                 if table in tables:
                     c.execute(f"UPDATE {table} SET state='held_restored' WHERE state='pending'")
+            if 'desktop_notifications' in tables:c.execute("UPDATE desktop_notifications SET state='suppressed' WHERE state IN ('pending','claimed')")
+            if 'slack_conversations' in tables:c.execute("UPDATE slack_conversations SET state='held_restored' WHERE state IN ('received','queued','planning','reply_pending','control_ready')")
             profile=c.execute("SELECT value FROM settings WHERE key='execution_profile'").fetchone()
             if profile:
                 archive_setting(c,'execution_profile',profile[0])

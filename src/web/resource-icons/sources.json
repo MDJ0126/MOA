@@ -1,0 +1,102 @@
+[
+  {
+    "id": "python",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/python/python-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "git",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/git/git-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "nodejs",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/nodejs/nodejs-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "vscode",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/vscode/vscode-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "blender",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/blender/blender-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "gimp",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/gimp/gimp-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "inkscape",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/inkscape/inkscape-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "slack",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/slack/slack-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "unity",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/unity/unity-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "visualstudio",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/visualstudio/visualstudio-plain.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "chrome",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/chrome/chrome-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "id": "archive",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "ffmpeg",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "design",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "quality",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "image",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "research",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "skill",
+    "source": "MOA original vector icon",
+    "license": "project asset"
+  },
+  {
+    "id": "unrealengine",
+    "source": "https://raw.githubusercontent.com/devicons/devicon/v2.16.0/icons/unrealengine/unrealengine-original.svg",
+    "license": "Devicon MIT; respective brand trademarks apply"
+  },
+  {
+    "license": "Official Affinity/Canva product icon; respective trademarks apply",
+    "id": "affinity",
+    "source": "https://static.canva.com/domain-assets/affinity/static/images/android-192x192-2.png"
+  }
+]

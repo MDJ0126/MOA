@@ -8,6 +8,14 @@
   "threads": 4,
   "context_size": 4096,
   "max_revisions": 2,
-  "engine": {"enabled": false},
-  "slack": {"enabled": false}
+  "engine": {
+    "enabled": false
+  },
+  "slack": {
+    "enabled": false
+  },
+  "cache_ram_mib": 256,
+  "sleep_idle_seconds": 300,
+  "prestart_vm": true,
+  "compact_guest_prompts": true
 }

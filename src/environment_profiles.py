@@ -3,7 +3,7 @@ import math
 import platform
 from setup_config import hardware,read_setting,checked_write_setting
 
-DEFAULT={'target_os':'auto','location':'shared_vm','budget_percent':50}
+DEFAULT={'target_os':'windows','location':'shared_vm','budget_percent':50}
 TARGETS=('auto','windows','linux','macos')
 LOCATIONS=('host','shared_vm','remote')
 
@@ -12,9 +12,13 @@ class UnavailableEnvironment(ValueError):pass
 def identity():
     return {'os':{'Windows':'windows','Linux':'linux','Darwin':'macos'}.get(platform.system()),'architecture':platform.machine()}
 
-def resolve(value,current=None):
+def resolve(value,current=None,vm=None):
     requested=validate(value);current=identity() if current is None else current
     target=current['os'] if requested['target_os']=='auto' else requested['target_os']
+    if requested['location']=='shared_vm' and vm:
+        if not vm.get('enabled'):raise UnavailableEnvironment('선택한 VM이 꺼져 있습니다. 작업 환경에서 VM 운영체제·디스크를 준비하고 사용을 켜 주세요.')
+        if vm.get('guest_os','linux')!=target:raise UnavailableEnvironment('선택한 대상 OS와 준비된 VM이 다릅니다. 다른 운영체제로 대신 실행하지 않습니다.')
+        return {'version':1,'requested':requested,'target_os':target,'runner':'qemu','architecture':'x86_64'}
     if requested['location']!='host':
         raise UnavailableEnvironment('선택한 VM·원격 실행 환경은 아직 연결되지 않았습니다. 환경 설정에서 현재 PC를 선택하거나 연결 구현 후 다시 요청하세요.')
     if target is None or target!=current['os']:
@@ -23,8 +27,12 @@ def resolve(value,current=None):
 
 def check_contract(value,kind,current=None):
     if not isinstance(value,dict) or type(value.get('version')) is not int or value['version']!=1:raise ValueError('실행 환경 계약 형식 오류')
-    if kind!='local':raise ValueError('호스트 실행 계약과 작업 환경이 다릅니다.')
-    expected=resolve(value.get('requested'),current)
+    if value.get('runner')=='qemu':
+        if kind!='vm':raise ValueError('VM 실행 계약과 작업 환경이 다릅니다.')
+        expected=resolve(value.get('requested'),current,{'enabled':True,'guest_os':value.get('target_os')})
+    else:
+        if kind!='local':raise ValueError('호스트 실행 계약과 작업 환경이 다릅니다.')
+        expected=resolve(value.get('requested'),current)
     if value!=expected:raise UnavailableEnvironment('접수된 OS·아키텍처와 현재 실행 환경이 달라 작업을 보류했습니다. 원래 환경에서 재개하거나 새 작업을 등록하세요.')
     return expected
 
@@ -84,7 +92,7 @@ def recommend(value,host=None):
     if target=='macos':note+=' macOS 실행은 Mac 장비 연결을 기준으로 준비하세요.'
     return {'host':host,'target_os':target,'location':location,'presets':presets,'recommended':selected,
             'memory_budget_mb':memory,'cpu_budget':cpu,'note':note,'preparation_supported':supported,'connected':False,
-            'runtime_note':'새 작업에서 저장한 실행 환경을 선택하면 현재 PC와 대상 OS를 확인해 실행합니다. VM·원격 연결은 아직 미구현이며 미연결 대상을 대신 실행하지 않습니다.'}
+            'runtime_note':'새 작업은 저장한 실행 환경을 사용합니다. Windows VM은 설치된 디스크와 QEMU Guest Agent가 필요하며 Linux VM은 번들 Tiny Core 명령 연결을 사용합니다. 원격 PC는 미지원입니다. 다른 OS로 대신 실행하지 않습니다.'}
 
 def validate(value):
     if not isinstance(value,dict):raise ValueError('실행 환경 설정 객체가 필요합니다.')

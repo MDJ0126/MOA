@@ -4,6 +4,7 @@ from contextlib import contextmanager,nullcontext
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -17,6 +18,16 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checks import run_checks
 from diagnostics import inspect_installation
+import peer_scores
+import deliverables
+import project_git
+import git_publication
+import task_timing
+import leader_review
+import desktop_notifications
+import organization
+from leader_inbox import LeaderInbox
+import onboarding
 from source_state import SourceState,diagnostic_check
 from data_backup import inspect_backup
 from backup_jobs import schedule_request,request_status,list_backups
@@ -26,14 +37,21 @@ from reports import publish,workspace_files,hash_file
 from supervisor import write_status
 from health import status as health_status
 from model_transport import request_json,ollama_text,model_output,ModelError,RETRY_STATUSES,validate_url
-from artifacts import open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
-from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,SettingsConflict,validate_team
+from artifacts import disposition,open_artifact,chunks,metadata as artifact_metadata,content_type,download_name
+from setup_config import team_settings,save_team,make_plan,legacy_plan,hardware,PRESETS,slack_settings,save_slack,manifest,read_setting,write_setting,SettingsConflict,validate_team
 from slack_service import SlackService,test_connection,SDK_AVAILABLE
+from slack_auto import SlackAuto
 import environment_profiles
 import vbox_setup
 import vbox_install
 import app_lifecycle
-from vm_runtime import VM,BusyVM,VMAdmissionBusy,settings as vm_settings,validate_actions
+from prompt_refinement import refine as refine_prompt
+import slack_workflow
+from guest_agent import GuestAgent
+from workspace_resources import Resources,PendingResource,frozen_context
+from office_chat import OfficeChat
+import team_profiles
+from vm_runtime import VM,BusyVM,VMAdmissionBusy,VMRecoveryPending,settings as vm_settings,validate_actions
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_HASH=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -54,7 +72,7 @@ def checked_file_name(name):
 
 def has_vm_input(plan,role):
     env=plan.get('environment',{})
-    return env.get('kind')=='vm' and any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[]))
+    return env.get('kind')=='vm' and (env.get('guest_execution') is True or any(a.get('role')==role and a.get('action') in ('key','text','click') for a in env.get('actions',[])))
 
 
 class StageDeferred(Exception):pass
@@ -112,6 +130,7 @@ class Store:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = self.root / 'state.sqlite3'
+        slack_workflow.initialize(self)
         with self.connect() as c:
             c.executescript('''
             CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, title TEXT, mode TEXT,
@@ -140,6 +159,11 @@ class Store:
                 available_at REAL DEFAULT 0,receipt TEXT DEFAULT '',error TEXT DEFAULT '')''')
             c.execute('CREATE UNIQUE INDEX IF NOT EXISTS tasks_source_key ON tasks(source_key) WHERE source_key IS NOT NULL')
             c.execute('''CREATE TABLE IF NOT EXISTS slack_threads(task_id TEXT PRIMARY KEY,channel TEXT,thread_ts TEXT,connection_id TEXT)''')
+        git_publication.initialize(self)
+        task_timing.initialize(self)
+        leader_review.initialize(self)
+        peer_scores.initialize(self)
+        desktop_notifications.initialize(self)
 
     @contextmanager
     def connect(self):
@@ -166,7 +190,7 @@ class Store:
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',
                       (tid, agent, kind, content, time.time(),recipient,capability))
 
-    def add(self, title, mode, acceptance='', max_revisions=2, auto_recover=True, required_files=None,source_key=None,slack_context=None,environment='local',vm_actions=None,request_key=None,expected_profile_updated=None):
+    def add(self, title, mode, acceptance='', max_revisions=2, auto_recover=True, required_files=None,source_key=None,slack_context=None,environment='local',vm_actions=None,request_key=None,expected_profile_updated=None,requested_agent=None,leader_decision=None):
         if not isinstance(title,str):raise ValueError('작업 내용은 문자열이어야 합니다.')
         title = title.strip()
         fingerprint=''
@@ -176,6 +200,8 @@ class Store:
             source_key='ui:'+request_key
             fingerprint_fields=[title,mode,acceptance,max_revisions,auto_recover,required_files or [],environment,vm_actions or []]
             if environment=='profile' and expected_profile_updated is not None:fingerprint_fields.append(expected_profile_updated)
+            if requested_agent is not None:fingerprint_fields.append(requested_agent)
+            if leader_decision is not None:fingerprint_fields.append(leader_decision)
             fingerprint=hashlib.sha256(json.dumps(fingerprint_fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
             with self.connect() as c:existing=c.execute('SELECT id,request_fingerprint FROM tasks WHERE source_key=?',(source_key,)).fetchone()
             if existing:
@@ -185,17 +211,56 @@ class Store:
             raise ValueError('작업 내용 또는 실행 모드가 올바르지 않습니다.')
         tid = uuid.uuid4().hex[:12]
         plan=make_plan(self,tid)
+        if leader_decision is not None:
+            from leader_inbox import validate as validate_leader
+            agents=json.loads(json.dumps(leader_decision['agents']));decision=validate_leader(agents,leader_decision,{'title':title,'recipient_id':leader_decision['leader_id'],'required_files':required_files,'acceptance':acceptance,'vm_actions':vm_actions})
+            from leader_inbox import refinement_text
+            brief=refinement_text(decision['refinement']) if decision.get('refinement') else ''
+            if brief:
+                for assignment in decision['assignments']:assignment['instruction']='[원문 우선 원칙]\n원문 요청과 명시된 검증 조건이 우선입니다. 정리본이 원문의 범위를 늘리거나 조건과 충돌하면 원문을 따르세요. 미확인 항목을 새로운 필수 요구사항으로 취급하지 마세요.\n\n[리더가 정리한 요청]\n'+brief+'\n\n[담당 단계 지시]\n'+assignment['instruction']
+            chief=next(a for a in agents if a['id']==leader_decision['leader_id'])
+            if decision.get('work_kind')!='code' or decision.get('self_execution'):
+                for item in decision['assignments']:
+                    actor=next(a for a in agents if a['id']==item['agent_id']);actor['capabilities']=list(dict.fromkeys(actor['capabilities']+[item['role']]))
+            chief['capabilities']=list(dict.fromkeys(chief['capabilities']+['planner']))
+            if any(a['role']=='reporter' and a['agent_id']==chief['id'] for a in decision['assignments']):chief['capabilities'].append('reporter')
+            plan={'agents':agents,'pipeline':['planner']+[a['role'] for a in decision['assignments']],'assignment':{'planner':chief['id'],**{a['role']:a['agent_id'] for a in decision['assignments']}},'leader_workflow':{**decision,'leader_id':chief['id'],'request_id':leader_decision['request_id']}}
+        if leader_decision is not None and plan['leader_workflow'].get('work_kind')!='code':
+            kind=plan['leader_workflow']['work_kind']
+            plan['work_kind']=kind
+            plan['stage_labels']={'planner':'접수','developer':{'image':'이미지 확보','research':'자료 조사','design':'디자인 작업','general':'업무 처리'}[kind],'reviewer':{'image':'출처·파일 확인','research':'출처·근거 확인','design':'결과 확인','general':'결과 확인'}[kind],'reporter':'결과 전달'}
+        if requested_agent is not None:
+            target=next((a for a in plan['agents'] if a['id']==requested_agent),None)
+            if not target:raise ValueError('업무를 받을 팀원을 찾을 수 없습니다.')
+            for role in target['capabilities']:
+                if role in plan['pipeline']:plan['assignment'][role]=target['id']
+        plan['workspace_context']=frozen_context(self)
+        if mode!='demo':plan['leader_review']={'enabled':True,'min_rounds':2,'max_rounds':int(max_revisions)+2,'leader_id':plan['assignment']['planner']}
+        collaboration=read_setting(self,'slack',{})
+        if collaboration.get('enabled') and collaboration.get('collaboration'):
+            if not collaboration.get('receive') or not collaboration.get('notify'):raise ValueError('Slack 협업에는 수신·전송 연결이 모두 필요합니다.')
+            plan['collaboration']={'transport':'slack','team_dm':collaboration.get('team_dm',False),'channel_receipts':collaboration.get('channel_receipts',False)}
+            environment='profile'
         contract=None
         if environment=='profile':
             selected_profile=environment_profiles.settings(self)
             if expected_profile_updated is not None and expected_profile_updated!=selected_profile.get('updated',0):raise SettingsConflict('작업 환경 설정이 변경되었습니다. 최신 설정을 확인한 뒤 다시 맡기세요.')
-            contract=environment_profiles.resolve(selected_profile)
-        if environment=='profile':environment='local'
+            contract=environment_profiles.resolve(selected_profile,vm=vm_settings(self))
+            environment='guest' if contract['runner']=='qemu' else 'local'
+        guest_execution=environment=='guest'
+        if guest_execution:
+            if mode!='llama':raise ValueError('VM 자율 작업은 실제 로컬 AI 모드로 실행하세요.')
+            if acceptance:raise ValueError('고정 Python 코드는 호스트 전용입니다. VM 작업의 실행 검증은 작업 내용에 게스트 검증 명령으로 지정하세요.')
+            environment='vm'
         if environment not in ('local','vm'):raise ValueError('작업 환경은 local·vm·profile 중 선택하세요.')
+        if guest_execution and vm_settings(self).get('guest_os')=='windows':
+            session=VM(self).session();probe=read_setting(self,'windows_guest_probe',{})
+            if not session or session.get('config',{}).get('installation_only') or probe.get('session')!=session.get('name'):raise ValueError('Windows 설치 후 업무용 메모리로 재시작하고 Windows 명령 연결 확인을 완료해 주세요. 다른 OS로 대신 실행하지 않습니다.')
         actions=validate_actions(vm_actions or [],plan['pipeline'])
         if environment=='local' and actions:raise ValueError('VM 화면 동작을 사용하려면 공유 VM 환경을 선택하세요.')
         if environment=='vm' and not vm_settings(self)['enabled']:raise ValueError('설정에서 공유 VM을 먼저 준비하세요.')
         plan['environment']={'kind':environment,'actions':actions,'config':vm_settings(self) if environment=='vm' else None}
+        if guest_execution:plan['environment']['guest_execution']=True
         if contract is not None:plan['environment'].update(selection='profile',execution_contract=contract)
         if slack_context:
             target=next((a for a in plan['agents'] if a['id']==slack_context['agent_id']),None)
@@ -221,19 +286,30 @@ class Store:
             c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=?",(tid,))
             if slack_context:
                 c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_context['channel'],slack_context['thread_ts'],slack_context['connection_id']))
+                if slack_context.get('user_id'):c.execute('INSERT OR IGNORE INTO slack_requesters VALUES(?,?)',(tid,slack_context['user_id']))
+                if slack_context.get('pending_attachments'):c.execute("UPDATE tasks SET retry_at=?,wait_reason='slack_attachment' WHERE id=?",(time.time()+3600,tid))
             slack_config=read_setting(self,'slack',{})
-            if not source_key and slack_config.get('enabled') and slack_config.get('notify') and slack_config.get('channel'):
+            if (not source_key or source_key.startswith('ui:')) and slack_config.get('enabled') and slack_config.get('notify') and slack_config.get('channel'):
                 connections=slack_config['connections']
                 connection=next((x for x in connections if x['agent_id']=='shared'),connections[0])
                 c.execute('INSERT INTO slack_threads VALUES(?,?,?,?)',(tid,slack_config['channel'],'',connection['id']))
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'user','instruction',title,time.time()))
+            if leader_decision is not None:
+                chief=plan['leader_workflow']['leader_id'];first=plan['assignment'][plan['pipeline'][1]]
+                c.execute("UPDATE messages SET recipient=? WHERE task_id=? AND agent='user' AND kind='instruction'",(chief,tid))
+                result={'summary':plan['leader_workflow']['summary']+('\n\n[리더가 정리한 요청]\n'+brief if brief else ''),'assignments':plan['leader_workflow']['assignments']}
+                if brief:c.execute('INSERT INTO messages(task_id,agent,kind,content,created,capability) VALUES(?,?,?,?,?,?)',(tid,chief,'progress','[리더가 정리한 요청]\n'+brief,time.time(),'planner'))
+                if first!=chief:self.deliver(tid,chief,first,{'summary':result['summary'],'assignments':result['assignments'],'capability':'planner'},handoff=result,_connection=c)
+                else:c.execute('INSERT INTO messages(task_id,agent,kind,content,created,capability) VALUES(?,?,?,?,?,?)',(tid,chief,'progress','제가 직접 실행하고 필요한 근거를 확인하겠습니다.',time.time(),'developer'))
+                c.execute('UPDATE tasks SET stage=1 WHERE id=?',(tid,))
+
         return tid
 
     def snapshot(self, limit=None):
         with self.connect() as c:
             bound=f' LIMIT {int(limit)}' if limit else ''
             messages=[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY seq DESC'+bound)]
-            return {'tasks': [public_task(r) for r in c.execute('SELECT * FROM tasks ORDER BY created DESC'+bound)],
+            return {'tasks': leader_review.enrich(c,task_timing.enrich(c,[public_task(r) for r in c.execute('SELECT * FROM tasks ORDER BY created DESC'+bound)])),
                     'messages': list(reversed(messages)),
                     'message_count':c.execute('SELECT COUNT(*) FROM messages').fetchone()[0],
                     'deliveries':list(reversed([dict(r) for r in c.execute('SELECT * FROM deliveries ORDER BY id DESC'+bound)])),
@@ -287,7 +363,9 @@ class Store:
             c.execute('INSERT INTO outbox(delivery_id,payload) VALUES(?,?)',(cursor.lastrowid,json.dumps({'task_id':tid,'sender':sender,'recipient':recipient,'content':content},ensure_ascii=False)))
             capability=content.get('capability','')
             c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'message',f'{sender} → {recipient}: '+json.dumps(content,ensure_ascii=False),time.time(),recipient,capability))
-            if handoff is not None:c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'handoff',json.dumps(handoff,ensure_ascii=False),time.time(),recipient,capability))
+            if handoff is not None:
+                handoff={**handoff,**{key:content[key] for key in ('images','files') if isinstance(content.get(key),list)}}
+                c.execute('INSERT INTO messages(task_id,agent,kind,content,created,recipient,capability) VALUES(?,?,?,?,?,?,?)',(tid,sender,'handoff',json.dumps(handoff,ensure_ascii=False),time.time(),recipient,capability))
             if request_key is not None:c.execute('INSERT INTO message_requests VALUES(?,?,?)',(request_key,fingerprint,cursor.lastrowid))
         return True
 
@@ -432,7 +510,12 @@ Available tools: list; read(path); write(path,content) (developer only). Paths a
 Return one JSON object: {{"tool":"list|read|write","path":"...","content":"..."}}
 or {{"summary":"...","passed":true|false}} to finish. Reviewer must provide passed.
 Use tools to inspect evidence before approving. Changes stay in the task workspace.'''
+        system+='\n'+organization.instruction(json.loads(task.get('execution_plan') or '{}').get('agents',[task.get('agent',{})]))
+        system+='\nLeader-assigned instructions: '+task.get('leader_instruction','')
         system+='\nAssigned agent: '+json.dumps(task.get('agent',{}),ensure_ascii=False)
+        system+='\nUser workspace instructions and skills: '+json.dumps(task.get('workspace_preferences',{}),ensure_ascii=False)
+        resources=getattr(self,'resources',None)
+        if resources:system+='\nYou can request curated programs or skills with {"tool":"resource","request":"program:ID or skill:ID"} before implementation. Available: '+json.dumps(resources.available(),ensure_ascii=False)
         messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': json.dumps({'task':task['title'], 'handoffs':relevant_history(history,role,task.get('agent',{}).get('id')), 'verification':task.get('verification'),'execution_environment':task.get('execution_environment')}, ensure_ascii=False)}]
         read_evidence = False
         for _ in range(12):
@@ -451,6 +534,10 @@ Use tools to inspect evidence before approving. Changes stay in the task workspa
                     raise ValueError('검증 담당이 실제 파일 도구를 실행하지 않았습니다.')
                 return action
             messages.append({'role':'assistant', 'content':response})
+            if action['tool']=='resource':
+                if not resources:raise ValueError('프로그램·스킬 요청 도구가 없습니다.')
+                result=resources.fulfill(task,action.get('request'),task.get('agent',{}).get('id'),role=role)
+                messages.append({'role':'user','content':'Resource result: '+json.dumps(result,ensure_ascii=False)});continue
             result = files.execute(action, role == 'developer')
             read_evidence = read_evidence or action['tool'] == 'read'
             log('tool', json.dumps({'request':action, 'result':result}, ensure_ascii=False))
@@ -463,31 +550,37 @@ class Worker:
         self.demo_only=demo_only
         self.store, self.model, self.url = store, model, url
         self.vm=VM(store)
+        self.resources=Resources(store,demo_only)
         self.stop = threading.Event()
         self.last_loop_at=None;self.heartbeat_write_ok=None
 
     def recover(self):
+        self.resources.recover()
         with self.store.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             for row in c.execute("SELECT * FROM tasks WHERE status IN ('running','interrupted')").fetchall():
-                error='이전 실행 중 종료됨. 파일과 기록 확인 후 재개하세요.'
+                if row['status']=='interrupted' and row['wait_reason']=='resource_setup':continue
+                error='이전 실행 중 종료됨. 파일과 기록 확인 후 재개하세요.';recoverable_windows=False
                 try:
                     frozen=checked_plan(row)
                     pipeline=frozen['pipeline']
                     role=pipeline[row['stage']]
-                    blocked=bool(row['instruction_review_required']) or has_vm_input(frozen,role)
+                    review_pending=c.execute('SELECT 1 FROM leader_review_pending WHERE task_id=?',(row['id'],)).fetchone()
+                    recoverable_windows=frozen.get('environment',{}).get('guest_execution') is True and frozen.get('environment',{}).get('config',{}).get('guest_os')=='windows' and not frozen.get('environment',{}).get('actions')
+                    blocked=bool(row['instruction_review_required']) or (has_vm_input(frozen,role) and not review_pending and not recoverable_windows)
                     if row['instruction_review_required']:error='추가 지시로 VM 입력 단계의 재실행 확인이 필요합니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                     elif blocked:error='VM 입력 단계 중 종료되어 자동 복구를 보류했습니다. 게스트 상태 확인 후 수동으로 재개하세요.'
                 except (ValueError,TypeError,KeyError,IndexError,AttributeError) as exc:
                     blocked=True;error=str(exc) if isinstance(exc,(environment_profiles.UnavailableEnvironment,InvalidInstructionState)) else '저장된 실행 계획·단계를 확인하지 못해 자동 복구를 보류했습니다.'
                 retry=not blocked and row['auto_recover'] and row['failures']<3
-                c.execute("UPDATE tasks SET status=?,failures=failures+?,error=?,wait_reason='' WHERE id=?",('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,row['id']))
+                c.execute("UPDATE tasks SET status=?,failures=failures+?,error=?,wait_reason=? WHERE id=?",('queued' if retry else 'interrupted',int(bool(retry)),'저장된 단계에서 자동 복구' if retry else error,'vm_recovery' if retry and recoverable_windows else '',row['id']))
 
     def package(self, tid, status, verification=None,*,_connection=None):
         s=self.store
         with (nullcontext(_connection) if _connection is not None else s.connect()) as c:
             task=dict(c.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone())
             rows=[dict(r) for r in c.execute('SELECT * FROM messages WHERE task_id=? ORDER BY seq',(tid,))]
+            quality=leader_review.summary(c,tid)
         if task['artifact_publication'] is None:
             if _connection is not None:raise ValueError('구형 보고서는 실행 단계에서 발행 확인을 준비해야 합니다.')
             with s._write_transaction() as c:c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=? AND artifact_publication IS NULL",(tid,))
@@ -502,13 +595,19 @@ class Worker:
                   'slack_reporting_enabled':bool(read_setting(s,'slack',{}).get('enabled')),
                   'limitations':['엔진 미연결','Python 실행은 OS 보안 샌드박스가 아님']+([] if read_setting(s,'slack',{}).get('enabled') else ['Slack 미연결'])+(['데모: 실제 AI 추론 없음'] if task['mode']=='demo' else []),
                   'history':rows}
+        manifest['quality_review']=quality
         folder.mkdir(parents=True,exist_ok=True)
         plan=json.loads(task['execution_plan']) if task['execution_plan'] else legacy_plan()
         manifest['team']=plan
+        if status=='completed' and leader_review.policy(plan):
+            with (nullcontext(_connection) if _connection is not None else s.connect()) as c:
+                if quality['review_count']<plan['leader_review']['min_rounds'] or not leader_review.approved(c,tid,self.file_hashes(LocalFiles(workspace))):raise ValueError('리더의 반복 검토·최종 승인 전에는 완료할 수 없습니다.')
         manifest['execution_environment']=plan.get('environment',{'kind':'local'})
         manifest['vm_evidence']=[str(p.relative_to(folder)).replace('\\','/') for p in (folder/'vm').glob('*.png')]
         manifest['vm_evidence_sha256']={name:hash_file(folder/name) for name in manifest['vm_evidence']}
-        if manifest['execution_environment'].get('kind')=='vm':manifest['limitations'].append('VM 환경 요청. 실제 입력·캡처 수행은 작업 기록과 근거 파일을 확인하세요. 화면 목표는 자동 판정하지 않으며 파일 생성·Python 검증은 호스트에서 실행합니다.')
+        if manifest['execution_environment'].get('guest_execution'):
+            manifest['limitations']=['QEMU Linux 게스트 안에서 명령 실행·파일 작업','터미널 출력·종료 코드 검증, 화면 의미 자동 판정 미지원']+([] if read_setting(s,'slack',{}).get('enabled') else ['Slack 미연결'])
+        elif manifest['execution_environment'].get('kind')=='vm':manifest['limitations'].append('VM 환경 요청. 실제 입력·캡처 수행은 작업 기록과 근거 파일을 확인하세요. 화면 목표는 자동 판정하지 않으며 파일 생성·Python 검증은 호스트에서 실행합니다.')
         rows=[enrich(m,plan) for m in rows]
         manifest['history']=rows
         hashes=manifest['verification'].get('source_hashes')
@@ -529,6 +628,44 @@ class Worker:
     def file_hashes(self,files):
         return {str(p.relative_to(files.folder)):hash_file(p)
                 for p in workspace_files(files.folder)}
+
+    def review_submission(self,task,plan,files,payload):
+        """Run outside the VM; route a durable leader decision through normal Slack receipts."""
+        s=self.store;tid=task['id'];stage=payload['stage'];hashes=self.file_hashes(files)
+        if payload['revision']!=task['revision'] or hashes!=payload['verification'].get('source_hashes'):
+            with s._write_transaction() as c:
+                c.execute('DELETE FROM leader_review_pending WHERE task_id=?',(tid,))
+                c.execute("UPDATE tasks SET status='queued',stage=?,error='파일 변경으로 리더 승인 전 재검증',wait_reason='' WHERE id=? AND status='running'",(min(task['stage'],plan['pipeline'].index('reviewer')),tid))
+            return None
+        if payload['state']=='approved':
+            with s.connect() as c:
+                if leader_review.approved(c,tid,hashes):return payload
+            raise ValueError('저장된 리더 승인과 현재 결과물의 근거가 다릅니다.')
+        chief=plan['leader_review']['leader_id']
+        s.log(tid,chief,'progress','리더가 원문·결과물·검증 근거를 대조하고 있습니다. 반복 검토 후 최종 승인합니다.',capability='leader_review')
+        value=leader_review.assess(s,task,plan,files,payload,self.model,self.url)
+        if hashes!=self.file_hashes(files):raise ValueError('리더 검토 중 파일이 변경되어 승인을 보류했습니다.')
+        with s._write_transaction() as c:
+            if self.defer_instruction(c,tid,plan,stage):return None
+            current=c.execute('SELECT status,revision FROM tasks WHERE id=?',(tid,)).fetchone()
+            if not current or current['status']!='running' or current['revision']!=task['revision']:return None
+            leader_review.record(c,task,value,hashes)
+            c.execute('INSERT INTO messages(task_id,agent,kind,content,created,capability) VALUES(?,?,?,?,?,?)',(tid,chief,'leader_review',json.dumps(value,ensure_ascii=False),time.time(),'leader_review'))
+            action=value['decision'];target_role='developer' if action=='revise' else 'reviewer'
+            content={'summary':f'리더 검토 {value["round"]}회 · '+{'revise':'반려·부분 수정 지시','recheck':'추가 재검토 지시','approve':'최종 승인'}[action]+'\n'+value['reason'],'instructions':value.get('instructions',''),'criteria':value['checks'],'capability':'leader_review','quality_review':leader_review.summary(c,tid)}
+            if not s.deliver(tid,chief,plan['assignment'][target_role],content,require_running=True,handoff={'summary':content['summary']+'\n'+content['instructions']},_connection=c):return None
+            if action=='approve':
+                c.execute("UPDATE leader_review_pending SET state='approved' WHERE task_id=?",(tid,))
+                c.execute("UPDATE tasks SET status='queued',wait_reason='leader_review',error='' WHERE id=?",(tid,))
+                return None
+            c.execute('DELETE FROM leader_review_pending WHERE task_id=?',(tid,))
+            exhausted=value['round']>=plan['leader_review']['max_rounds'] or (action=='revise' and task['revision']>=task['max_revisions'])
+            if exhausted:
+                c.execute("UPDATE tasks SET status='failed',error='리더 검토에서 수정 필요: 검토·수정 한도 도달',wait_reason='' WHERE id=?",(tid,))
+                self.package(tid,'failed',payload['verification'],_connection=c)
+                return None
+            c.execute("UPDATE tasks SET status='queued',stage=?,revision=revision+?,wait_reason='leader_review',verification='{}',error=? WHERE id=?",(plan['pipeline'].index(target_role),int(action=='revise'),'리더 부분 수정 지시' if action=='revise' else '리더 지시에 따른 추가 검증',tid))
+        return None
 
     def defer_instruction(self,c,tid,plan,stage):
         current=c.execute('SELECT status,stage,pending_instruction_stage,instruction_review_required FROM tasks WHERE id=?',(tid,)).fetchone()
@@ -574,14 +711,30 @@ class Worker:
                 if c.execute("UPDATE tasks SET status='interrupted',error=? WHERE id=? AND status='queued'",(message,task['id'])).rowcount:
                     c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(task['id'],'system','error',message,time.time()))
                 return True
+            if slack_workflow.enabled(plan) and slack_workflow.pending(s,task['id']):
+                c.execute("UPDATE tasks SET wait_reason='slack_delivery',error='Slack 스레드 전달 확인 대기',retry_at=? WHERE id=?",(time.time()+1,task['id']))
+                return False
             if c.execute("UPDATE tasks SET status='running' WHERE id=? AND status='queued'", (task['id'],)).rowcount!=1:return True
             c.execute("UPDATE tasks SET artifact_publication='{}' WHERE id=? AND artifact_publication IS NULL",(task['id'],))
         tid = task['id']
         pipeline=plan['pipeline'];assignment=plan['assignment']
-        role=None
+        role=None;reviewing=False
         try:
             files = LocalFiles(s.root / 'tasks' / tid / 'workspace')
+            import team_growth
+            team_growth.bind(s,task,plan)
+            released=None
+            pending=leader_review.pending(s,tid) if leader_review.policy(plan) else None
+            if pending:
+                reviewing=True;task['verification']=pending['verification']
+                with s.connect() as c:c.execute("UPDATE tasks SET wait_reason='leader_review' WHERE id=? AND status='running'",(tid,))
+                released=self.review_submission(task,plan,files,pending)
+                if released is None:return True
+                reviewing=False
             backend = Demo() if task['mode'] == 'demo' else Llama(self.model,self.url) if task['mode']=='llama' else Ollama(self.model, self.url)
+            guest_execution=plan.get('environment',{}).get('guest_execution') is True
+            if guest_execution:backend=GuestAgent(self.vm,self.model,self.url)
+            backend.resources=self.resources
             for stage in range(task['stage'], len(pipeline)):
                 with s._write_transaction() as c:
                     current=c.execute('SELECT status,stage,pending_instruction_stage,instruction_review_required FROM tasks WHERE id=?',(tid,)).fetchone()
@@ -600,8 +753,34 @@ class Worker:
                         return True
                     history = [dict(r) for r in c.execute("SELECT agent,content,recipient,capability FROM messages WHERE task_id=? AND kind='handoff' ORDER BY seq", (tid,))]
                 role = pipeline[stage];actor=assignment[role]
+                if slack_workflow.enabled(plan):history=slack_workflow.history(s,tid)
                 task['agent']=next(a for a in plan['agents'] if a['id']==actor)
+                next_actor=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
+                task['next_teammate']=next((a['name'] for a in plan['agents'] if a['id']==next_actor),'사용자')
+                task['leader_instruction']=next((a['instruction'] for a in plan.get('leader_workflow',{}).get('assignments',[]) if a['role']==role),'')
+                task['leader_instruction']+=leader_review.instructions(s,tid,role)+team_growth.instructions(s,tid,actor)
                 task['execution_environment']=plan.get('environment',{'kind':'local'})
+                task['work_kind']=plan.get('work_kind','code')
+                task['stage_labels']=plan.get('stage_labels',{})
+                task['workspace_preferences']=self.resources.task_context(task)
+                command_sequence=0
+                def record_stage(kind,text):
+                    nonlocal command_sequence
+                    s.log(tid,actor,kind,text,capability=role)
+                    if not slack_workflow.enabled(plan) or kind not in ('guest_plan','guest_result','research_result','browser_action'):return
+                    content={'summary':text,'capability':role}
+                    if kind=='research_result':
+                        researched=json.loads(text);content={'summary':'공개 출처 리서치 결과: '+researched.get('source',''), 'capability':role,'research':researched}
+                        if researched.get('path') in ('research/image.jpg','research/image.png'):content['images']=['workspace/'+researched['path']]
+                    if kind=='browser_action':
+                        observation=json.loads(text);content={'summary':'실제 VM 브라우저 · '+observation.get('stage','작업'),'capability':role,'images':['workspace/'+observation['screenshot']]}
+                    if kind=='guest_result':
+                        observation=json.loads(text);command_sequence+=1
+                        image=f'vm/{task.get("vm_capture_stamp", "r%s-%s" % (task["revision"],role))}-command-{command_sequence}.png'
+                        self.vm.capture(s.root/'tasks'/tid/image)
+                        content={'summary':'실제 VM 실행 결과를 공유합니다.','capability':role,'guest_results':[observation],'images':[image]}
+                    recipient=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
+                    s.deliver(tid,actor,recipient,content,require_running=True)
                 def prepare_stage():
                     with s._write_transaction() as c:
                         deferred=self.defer_instruction(c,tid,plan,stage)
@@ -609,14 +788,14 @@ class Worker:
                     if deferred:raise StageDeferred()
                     self.checkpoint(tid,stage,task['revision'],files)
                     if role=='reviewer':
-                        verification=run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0}
+                        verification=({'passed':False,'scope':'actual QEMU guest commands; reviewer pending','tests_run':0} if guest_execution else run_checks(files.folder,task['acceptance']) if task['mode']!='demo' else {'passed':True,'scope':'demo file comparison only','tests_run':0})
                         missing=[p for p in json.loads(task['required_files']) if not files.path(p).is_file()]
                         verification['missing_files']=missing
                         verification['passed']=verification['passed'] and not missing
                         verification['source_hashes']=self.file_hashes(files)
                         if plan.get('environment',{}).get('kind')=='vm':verification['vm']={'input_scope':'QMP guest input and screenshots','visual_goal_verified':False,'file_checks_location':'host'}
                         contract=plan.get('environment',{}).get('execution_contract')
-                        if contract is not None:verification['execution_target']={'target_os':contract['target_os'],'runner':'host','architecture':contract['architecture'],'execution_tests_performed':task['mode']!='demo' and bool(verification.get('tests_run')),'scope':'Python checks only; engine and GUI not verified'}
+                        if contract is not None:verification['execution_target']={'target_os':contract['target_os'],'runner':contract['runner'],'architecture':contract['architecture'],'execution_tests_performed':task['mode']!='demo' and bool(verification.get('tests_run')),'scope':'Python checks only; engine and GUI not verified'}
                         task['verification']=verification
                         s.log(tid,actor,'verification',json.dumps(verification,ensure_ascii=False),capability=role)
                         with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(verification,ensure_ascii=False),tid))
@@ -627,12 +806,33 @@ class Worker:
                         with s.connect() as c:c.execute("UPDATE tasks SET stage=?,status='queued',error='검증 이후 파일 변경: 재검증 필요' WHERE id=? AND status='running'",(pipeline.index('reviewer'),tid))
                         s.log(tid,'system','verification_invalidated','검증한 파일과 현재 파일의 해시가 다릅니다.')
                         raise StageDeferred()
-                    s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {LABELS[role]} 단계 시작 ({task["mode"]})',capability=role)
-                with self.vm.stage(task,role,actor,before=prepare_stage):
-                    with s.connect() as c:
-                        current=c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()
-                        if not current or current[0]!='running':raise StageDeferred()
-                    result = backend.run(task, role, history, files, lambda kind, text: s.log(tid, actor, kind, text,capability=role))
+                    s.log(tid, actor, 'start', f'{task["agent"]["name"]} · {plan.get('stage_labels',{}).get(role,LABELS[role])} 단계 시작 ({task["mode"]})',capability=role)
+                if released and stage==released['stage']:
+                    result=released['result'];task['verification']=released['verification']
+                else:
+                    with self.vm.stage(task,role,actor,before=prepare_stage):
+                        with s.connect() as c:
+                            current=c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()
+                            if not current or current[0]!='running':raise StageDeferred()
+                        import goal_workspace
+                        goal_workspace.seed(s,task,plan,files,self.vm,role)
+                        result = backend.run(task, role, history, files, record_stage)
+                        if guest_execution and role in ('developer','reviewer'):
+                            if role=='reviewer':
+                                import shlex
+                                for name in json.loads(task['required_files']):
+                                    check=self.vm.command(tid,role,('if (-not (Test-Path -LiteralPath '+"'"+name.replace("'","''")+"'"+' -PathType Leaf)) { throw 1 }') if plan['environment'].get('config',{}).get('guest_os')=='windows' else 'test -f '+shlex.quote(name))
+                                    result.setdefault('guest_results',[]).append(check)
+                                    if check['exit_code']!=0:result['passed']=False
+                            exported=self.vm.export_workspace(tid,role,files)
+                            s.log(tid,actor,'guest_export',json.dumps(exported,ensure_ascii=False),capability=role)
+                    if guest_execution and role=='reviewer':
+                        results=result.get('guest_results',[])
+                        task['verification'].update(passed=result.get('passed') is True and bool(results) and results[-1].get('exit_code')==0,
+                            scope='actual QEMU guest commands and exit codes',tests_run=len(results),guest_results=results,
+                            source_hashes=self.file_hashes(files),missing_files=[],
+                            vm={'input_scope':'Windows PowerShell / QEMU Guest Agent' if plan['environment'].get('config',{}).get('guest_os')=='windows' else 'QMP terminal commands and serial stdout','visual_goal_verified':False,'file_checks_location':'guest'})
+                        with s.connect() as c:c.execute('UPDATE tasks SET verification=? WHERE id=?',(json.dumps(task['verification'],ensure_ascii=False),tid))
                 with s.connect() as c:
                     if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':
                         s.log(tid,actor,'control','중단된 단계의 응답 수신. 다음 담당자에게 전달하지 않습니다.')
@@ -642,7 +842,19 @@ class Worker:
                     for p in required:files.path(p)
                     task['required_files']=json.dumps(required)
                     with s.connect() as c:c.execute('UPDATE tasks SET required_files=? WHERE id=?',(task['required_files'],tid))
+                if role=='reviewer' and leader_review.policy(plan) and not released:
+                    with s._write_transaction() as c:
+                        if self.defer_instruction(c,tid,plan,stage):return True
+                        if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
+                        leader_review.queue(c,task,stage,result,task['verification'])
+                        chief=plan['leader_review']['leader_id']
+                        submitted='검증 실패 근거를 리더에게 보고합니다. 수정 범위는 리더가 지시합니다.' if result.get('passed') is not True or task['verification'].get('passed') is not True else '검증 결과를 리더에게 제출합니다. 최종 결과는 반복 검토·승인 후 전달합니다.'
+                        content={'summary':submitted+'\n'+result['summary'],'verification':task['verification'],'capability':'reviewer'}
+                        s.deliver(tid,actor,chief,content,require_running=True,_connection=c)
+                        c.execute("UPDATE tasks SET status='queued',wait_reason='leader_review',error='리더 검토 대기' WHERE id=?",(tid,))
+                    return True
                 if role == 'reviewer' and (result.get('passed') is not True or task['verification'].get('passed') is not True):
+                    s.log(tid,actor,'review_rejection',result['summary'],capability=role)
                     feedback={'summary':result['summary'],'verification':task['verification'],'request':'실패 조건을 수정하고 다시 제출하세요.','capability':role}
                     if task['revision']<task['max_revisions']:
                         with s._write_transaction() as c:
@@ -658,13 +870,35 @@ class Worker:
                         c.execute("UPDATE tasks SET status='failed',error=?,failures=failures+1,retry_at=0 WHERE id=? AND status='running'",(message,tid))
                         c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','error',message,time.time()))
                         self.package(tid,'failed',task.get('verification'),_connection=c)
+                        peer_scores.enqueue(s,tid,c)
                     return True
                 recipient=assignment[pipeline[stage+1]] if stage+1<len(pipeline) else 'user'
+                images=[f'vm/{task.get("vm_capture_stamp", "r%s-%s" % (task["revision"],role))}-{position}.png' for position in ('before','after')] if plan.get('environment',{}).get('kind')=='vm' else []
+                delivery=slack_workflow.handoff(result,task.get('verification',{}),role,images) if slack_workflow.enabled(plan) else {'summary':result['summary'],'verification':task.get('verification',{}),'capability':role}
+                if leader_review.policy(plan):
+                    with s.connect() as c:delivery['quality_review']=leader_review.summary(c,tid)
+                    if recipient=='user':
+                        with s.connect() as c:
+                            if delivery['quality_review']['review_count']<plan['leader_review']['min_rounds'] or not leader_review.approved(c,tid,self.file_hashes(files)):raise ValueError('리더 반복 검토·최종 승인 전에는 사용자에게 결과를 전달할 수 없습니다.')
+                        quality=delivery['quality_review'];delivery['summary']='리더 최종 승인 · 검토 '+str(quality['review_count'])+'회 · 반려 '+str(quality['rejection_count'])+'회 · 수정 '+str(task['revision'])+'회\n'+delivery['summary']
+                if recipient=='user' and slack_workflow.enabled(plan):
+                    outputs=deliverables.collect(files.folder)
+                    delivery['files']=['deliverables/'+name for name in list(outputs)[:8]]
+                    if files.path('research/report.md').is_file():delivery['result_text']=files.path('research/report.md').read_text(encoding='utf-8')[:12000]
+                if stage<len(pipeline)-1 and recipient==actor and plan.get('leader_workflow'):
+                    with s._write_transaction() as c:
+                        if self.defer_instruction(c,tid,plan,stage):return True
+                        c.execute("UPDATE tasks SET stage=?,error='' WHERE id=? AND status='running'",(stage+1,tid))
+                        c.execute('INSERT INTO messages(task_id,agent,kind,content,created,capability) VALUES(?,?,?,?,?,?)',(tid,actor,'progress','같은 담당자가 '+plan.get('stage_labels',{}).get(pipeline[stage+1],LABELS[pipeline[stage+1]])+' 작업을 이어서 수행합니다.',time.time(),pipeline[stage+1]))
+                    continue
                 if stage<len(pipeline)-1:
                     with s._write_transaction() as c:
                         if self.defer_instruction(c,tid,plan,stage):return True
-                        if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
+                        if not s.deliver(tid,actor,recipient,delivery,require_running=True,handoff=result,_connection=c):return True
                         c.execute("UPDATE tasks SET stage=?,status='running',error='' WHERE id=? AND status='running'",(stage+1,tid))
+                    if slack_workflow.enabled(plan):
+                        with s.connect() as c:c.execute("UPDATE tasks SET status='queued',wait_reason='slack_delivery' WHERE id=? AND status='running'",(tid,))
+                        return True
                     continue
                 if stage==len(pipeline)-1:
                     if task['verification'].get('source_hashes')!=self.file_hashes(files):
@@ -674,12 +908,28 @@ class Worker:
                         c.execute('BEGIN IMMEDIATE')
                         if self.defer_instruction(c,tid,plan,stage):return True
                         if c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0]!='running':return True
-                        if not s.deliver(tid,actor,recipient,{'summary':result['summary'],'verification':task.get('verification',{}),'capability':role},require_running=True,handoff=result,_connection=c):return True
+                        final_actor=plan['leader_review']['leader_id'] if leader_review.policy(plan) else actor
+                        if leader_review.policy(plan):delivery['capability']='leader_review'
+                        if not s.deliver(tid,final_actor,recipient,delivery,require_running=True,handoff={**result,'summary':delivery['summary']},_connection=c):return True
                         self.package(tid,'completed',task.get('verification'),_connection=c)
                         c.execute("UPDATE tasks SET stage=?,status='completed',error='' WHERE id=?",(len(pipeline),tid))
+                        peer_scores.enqueue(s,tid,c)
+                        git_publication.enqueue(s,tid,c)
                     return True
             return True
         except StageDeferred:return True
+        except PendingResource as error:
+            with s.connect() as c:c.execute("UPDATE tasks SET status='interrupted',wait_reason='resource_setup',error=? WHERE id=? AND status='running'",(str(error),tid))
+            s.log(tid,task.get('agent',{}).get('id','system'),'resource_wait',str(error))
+            if slack_workflow.enabled(plan):s.deliver(tid,task.get('agent',{}).get('id','system'),'user',{'summary':'작업 준비가 필요합니다: '+str(error),'capability':role or ''})
+            return True
+        except VMRecoveryPending as error:
+            with s._write_transaction() as c:
+                current=c.execute('SELECT status,wait_reason FROM tasks WHERE id=?',(tid,)).fetchone()
+                if current and current['status']=='running':
+                    c.execute("UPDATE tasks SET status='queued',wait_reason='vm_recovery',error=?,retry_at=? WHERE id=? AND status='running'",(str(error),time.time()+5,tid))
+                    if current['wait_reason']!='vm_recovery':c.execute('INSERT INTO messages(task_id,agent,kind,content,created) VALUES(?,?,?,?,?)',(tid,'system','vm_recovery',str(error),time.time()))
+            return True
         except VMAdmissionBusy:
             try:
                 with s.connect() as c:
@@ -699,7 +949,7 @@ class Worker:
                 if self.defer_instruction(c,tid,plan,locals().get('stage',task['stage'])):return True
             transient=e.retryable if isinstance(e,ModelError) else e.code in RETRY_STATUSES if isinstance(e,urllib.error.HTTPError) else isinstance(e,(urllib.error.URLError,TimeoutError,ConnectionError))
             retry=transient and task['failures']<2
-            vm_input=has_vm_input(plan,role)
+            vm_input=has_vm_input(plan,role) and not reviewing
             blocked=retry and vm_input
             message=str(e)
             if transient and task['failures']>=2:message+=' 자동 재시도 한도에 도달했습니다. 서버 상태를 확인한 뒤 수동으로 재개하세요.'
@@ -723,6 +973,7 @@ class Worker:
             try:
                 self.last_loop_at=time.time()
                 self.heartbeat_write_ok=write_status(self.store.root/'heartbeat.json',{'pid':os.getpid(),'time':self.last_loop_at})
+                if not self.demo_only and not read_setting(self.store,'paused',False):git_publication.process_one(self.store)
                 if not self.tick():self.stop.wait(.5)
             except Exception as e:
                 self.store.log('-','system','worker_error',repr(e));self.stop.wait(2)
@@ -740,6 +991,13 @@ def serve(root, port, model, url,demo_only=False):
                 if row['mode']!='demo' or (json.loads(row['execution_plan']) if row['execution_plan'] else {}).get('environment',{}).get('kind','local')!='local':raise ValueError('실제 AI·VM 작업이 있는 데이터는 데모 전용으로 열 수 없습니다.')
         model='';url='http://127.0.0.1:0'
     worker = Worker(store, model, url,demo_only=demo_only)
+    office_chat=OfficeChat(store,model,url,demo_only)
+    team_profiles.ensure_defaults(store)
+    leader_inbox=LeaderInbox(store,model,url)
+    from continuous_goals import Goals
+    goals=Goals(store,leader_inbox,model,url)
+    scores=peer_scores.PeerScores(store,model,url)
+    score_thread=threading.Thread(target=(lambda:None) if demo_only else scores.loop,daemon=True)
     def vm_observation():
         if not demo_only:return worker.vm.status()
         return {'state':'stopped','owner':None,'error':'','installed':False,'iso_exists':False,'config':{**vm_settings(store),'enabled':False},'shared':True,'scope':'데모 전용 · 실제 VM에 접속하지 않습니다.'}
@@ -753,6 +1011,10 @@ def serve(root, port, model, url,demo_only=False):
         import fcntl
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     slack=SlackService(store)
+    from slack_conversations import SlackConversations
+    slack.conversations=SlackConversations(slack,leader_inbox)
+    slack_conversation_thread=threading.Thread(target=(lambda:None) if demo_only else slack.conversations.loop,daemon=True)
+    slack_auto=SlackAuto(store)
     slack_thread=threading.Thread(target=(lambda:None) if demo_only else slack.loop,daemon=True)
     maintenance_lock=threading.Lock()
     maintenance={'backup':None}
@@ -791,12 +1053,63 @@ def serve(root, port, model, url,demo_only=False):
                 state['integrations']={'engine':'미연결','slack':'미연결 · 내부 outbox 저장 중'}
                 state['model_url']=url
                 state['team']=team_settings(store)
+                state['leader_requests']=leader_inbox.recent()
+                state['continuous_goals']=goals.snapshot()
                 state['vm']=vm_observation()
+                import office
+                state['office_appearance']=office.appearance(store)
+                state['office_life']=office.life(store)
+                state['agent_profiles']=team_profiles.public(store)
+                state['peer_scores']=peer_scores.summary(store)
+                with store.connect() as c:
+                    state['agent_activity']=[{'agent_id':r['rater'],'state':'running','label':label,'detail':'동료의 실제 업무 근거를 평가하고 있습니다.'} for table,label in (('peer_score_jobs','업무 평가'),) for r in c.execute('SELECT rater FROM '+table+" WHERE state='running'")]
+                    state['agent_activity'] += [{'agent_id':r['agent_id'],'state':r['state'],'label':'대화 답변','detail':'대화 요청에 답변하고 있습니다.'} for r in c.execute("SELECT agent_id,state FROM office_chat WHERE role='assistant' AND state IN ('queued','running')")]
+
                 state['slack_status']=slack.status
+                workspace=next((c.get('workspace','') for c in state['slack_status'].get('connections',[]) if c.get('workspace')), '')
+                state['company']=office.company(store,workspace)
+                import project_git
+                state['project_git']=project_git.settings(store)
+                state['git_publications']=git_publication.recent(store)
+                state['git_receipts']=read_setting(store,'project_git_receipts',{})
+                state['desktop_notifications']=desktop_notifications.settings(store)
+                state['slack_auto']=slack_auto.snapshot()
                 status_file=store.root/'supervisor.json'
                 try:state['supervisor']=json.loads(status_file.read_text(encoding='utf-8')) if status_file.exists() else None
                 except (OSError,ValueError):state['supervisor']=None
                 self.send(200,state)
+            elif self.path.startswith('/api/leader/request?'):
+                try:result=leader_inbox.get(parse_qs(urlparse(self.path).query).get('id',[''])[0])
+                except ValueError as error:self.send(404,{'error':str(error)});return
+                self.send(200,result)
+            elif self.path.startswith('/api/company/icon'):
+                import office
+                self.send(200,office.company_icon(store),'image/png')
+            elif self.path=='/api/team/organization':
+                self.send(200,organization.snapshot(team_settings(store)['agents']))
+            elif self.path.startswith('/api/team/affinity?'):
+                self.send(410,{'error':'호감도 기능은 제거되었습니다. 업무 점수를 사용합니다.'})
+            elif self.path.startswith('/api/team/scores?'):
+                self.send(200,peer_scores.detail(store,parse_qs(urlparse(self.path).query).get('agent_id',[''])[0]))
+            elif self.path.startswith('/api/team/profile-candidates?'):
+                query=parse_qs(urlparse(self.path).query)
+                try:result=team_profiles.candidates(store,query.get('agent_id',[''])[0],query.get('gender',[None])[0])
+                except ValueError as error:self.send(400,{'error':str(error)});return
+                self.send(200,result)
+            elif self.path.startswith('/api/team/profile-candidate?'):
+                key=parse_qs(urlparse(self.path).query).get('id',[''])[0]
+                try:body=team_profiles.candidate_path(key).read_bytes()
+                except (ValueError,OSError):self.send(404,{'error':'추천 이미지를 찾을 수 없습니다.'});return
+                self.send(200,body,'image/png')
+            elif self.path.startswith('/api/team/profile?'):
+                aid=parse_qs(urlparse(self.path).query).get('id',[''])[0]
+                path=team_profiles.image_path(store,aid)
+                if path is None:
+                    if aid not in {a['id'] for a in team_settings(store)['agents']}:self.send(404,{'error':'팀원을 찾을 수 없습니다.'});return
+                    path=ROOT/'docs/assets/moa-logo.png'
+                self.send(200,path.read_bytes(),'image/png')
+            elif self.path.startswith('/api/office/chat?'):
+                self.send(200,office_chat.messages(parse_qs(urlparse(self.path).query).get('agent_id',[''])[0]))
             elif self.path=='/api/diagnostics':
                 result=inspect_installation(ROOT,CONFIG,SDK_AVAILABLE);source=SOURCE_STATE.inspect(force=True);result['checks'].append(diagnostic_check(source))
                 self.send(200,{**result,'app_source_sha256':SOURCE_HASH,'source_status':source})
@@ -810,26 +1123,33 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(200,list_backups(ROOT,store))
             elif self.path=='/api/vbox/setup':
                 self.send(200,{'plan':read_setting(store,'vbox_plan',None),'preparation':read_setting(store,'vbox_preparation',None),'installation':read_setting(store,'vbox_installation',None),'restoration':vbox_setup.restoration_status(store)})
+            elif urlparse(self.path).path=='/api/role-presets':
+                self.send(200,{'presets':__import__('role_presets').search(parse_qs(urlparse(self.path).query).get('q',[''])[0]),'work_kind_labels':__import__('role_presets').LABELS})
             elif self.path=='/api/setup':
-                self.send(200,{'team':team_settings(store),'presets':PRESETS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE,'execution_profile':environment_profiles.settings(store),'environment_recommendation':environment_profiles.recommend(environment_profiles.settings(store))})
+                self.send(200,{'onboarding':onboarding.status(store),'team':team_settings(store),'presets':PRESETS,'role_presets':__import__('role_presets').search(),'work_kind_labels':__import__('role_presets').LABELS,'hardware':hardware(),'slack':slack_settings(store),'slack_status':slack.status,'slack_sdk':SDK_AVAILABLE,'execution_profile':environment_profiles.settings(store),'environment_recommendation':environment_profiles.recommend(environment_profiles.settings(store))})
+            elif self.path=='/api/goals':
+                self.send(200,goals.snapshot())
+            elif self.path=='/api/onboarding':
+                self.send(200,onboarding.status(store))
             elif self.path=='/api/slack/recovery':
                 self.send(200,slack.recovery())
             elif self.path.startswith('/api/vm/evidence?'):
                 tid=parse_qs(urlparse(self.path).query).get('task',[''])[0]
                 with store.connect() as c:exists=c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone()
                 if not exists:self.send(404,{'error':'작업을 찾을 수 없습니다.'});return
-                files=[f'vm/{p.name}' for p in sorted((store.root/'tasks'/tid/'vm').glob('*.png')) if __import__('re').fullmatch(r'r\d+-(planner|developer|reviewer|reporter)-(before|after)\.png',p.name)]
+                files=[f'vm/{p.name}' for p in sorted((store.root/'tasks'/tid/'vm').glob('*.png')) if __import__('re').fullmatch(r'r\d+-(planner|developer|reviewer|reporter)(?:-visit\d+)?-(before|after)\.png',p.name)]
                 self.send(200,{'files':files})
             elif self.path=='/api/vm':
                 self.send(200,vm_observation())
             elif self.path=='/api/vm/screen':
                 if demo_only:self.send(400,{'error':'데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.'});return
                 try:
-                    with worker.vm.exclusive():path=worker.vm.capture(worker.vm.folder/'screen.png')
-                    self.send(200,path.read_bytes(),'image/png')
+                    self.send(200,worker.vm.screen_frame(),'image/png')
                 except (ValueError,OSError) as e:self.send(409,{'error':str(e)})
             elif self.path=='/api/slack/manifest':
                 self.send(200,manifest())
+            elif self.path=='/api/slack/auto':
+                self.send(200,slack_auto.snapshot())
             elif self.path=='/api/docs':
                 self.send(200,json.loads((ROOT/'docs'/'index.json').read_text(encoding='utf-8')))
             elif self.path.startswith('/guide-images/'):
@@ -858,7 +1178,7 @@ def serve(root, port, model, url,demo_only=False):
                         self.send_response(200);self.send_header('Content-Type',content_type(name));self.send_header('Content-Length',str(info.st_size))
                         self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
                         self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
-                        self.send_header('Content-Disposition',('attachment' if name.endswith('.zip') else 'inline')+'; filename="'+download_name(tid,name)+'"')
+                        self.send_header('Content-Disposition',disposition(tid,name))
                         self.end_headers();started=True
                         if self.command!='HEAD':
                             for block in chunks(stream,info.st_size):self.wfile.write(block)
@@ -881,7 +1201,7 @@ def serve(root, port, model, url,demo_only=False):
                 where=' WHERE '+' AND '.join(filters) if filters else ''
                 with store.connect() as c:
                     total=c.execute('SELECT count(*) FROM tasks'+where,args).fetchone()[0]
-                    rows=[public_task(r) for r in c.execute('SELECT * FROM tasks'+where+' ORDER BY created DESC,id DESC LIMIT 30 OFFSET ?',args+[page*30])]
+                    rows=leader_review.enrich(c,task_timing.enrich(c,[public_task(r) for r in c.execute('SELECT * FROM tasks'+where+' ORDER BY created DESC,id DESC LIMIT 30 OFFSET ?',args+[page*30])]))
                 self.send(200,{'tasks':rows,'total':total,'page':page,'has_more':(page+1)*30<total})
             elif self.path.startswith('/api/logs/export?'):
                 query=parse_qs(urlparse(self.path).query);tid=query.get('task',[''])[0];agent=query.get('agent',[''])[0]
@@ -913,7 +1233,13 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(200,{'messages':rows,'plan_unavailable':bool(query.get('task')) and frozen is None,'next_cursor':rows[-1]['seq'] if more else None})
             elif self.path == '/':
                 self.send(200,(ROOT/'src/web/dashboard.html').read_bytes(),'text/html; charset=utf-8')
-            elif self.path in ('/ui.css','/ui.js'):
+            elif self.path.startswith('/resource-icons/'):
+                name=self.path.removeprefix('/resource-icons/')
+                if not re.fullmatch('[a-z0-9-]+\\.svg',name):self.send(404,{'error':'아이콘을 찾을 수 없습니다.'});return
+                path=ROOT/'src/web/resource-icons'/name
+                if not path.is_file():self.send(404,{'error':'아이콘을 찾을 수 없습니다.'});return
+                self.send(200,path.read_bytes(),'image/svg+xml')
+            elif self.path in ('/ui.css','/ui.js','/office_pathing.js'):
                 self.send(200,(ROOT/'src/web'/self.path[1:]).read_bytes(),'text/css; charset=utf-8' if self.path.endswith('.css') else 'text/javascript; charset=utf-8')
             else:
                 self.send(404,{'error':'not found'})
@@ -923,14 +1249,77 @@ def serve(root, port, model, url,demo_only=False):
                 self.send(403,{'error':'origin rejected'}); return
             try:
                 size = int(self.headers.get('Content-Length','0'))
-                if not 0 < size <= 64000:
+                if not 0 < size <= (1500000 if self.path in ('/api/slack/auto','/api/team/profile','/api/company') else 64000):
                     raise ValueError('요청 크기 제한')
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data,dict):raise ValueError('JSON 객체가 필요합니다.')
-                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input','/api/vbox/plan','/api/vbox/prepare','/api/vbox/recovery','/api/vbox/install'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
+                if demo_only and self.path in ('/api/setup/slack','/api/slack/test','/api/setup/vm','/api/vm/control','/api/vm/input','/api/vm/pointer','/api/vbox/plan','/api/vbox/prepare','/api/vbox/recovery','/api/vbox/install'):raise ValueError('데모 전용 실행에서는 VM·Slack 연결을 사용할 수 없습니다.')
+                if self.path=='/api/goals':
+                    if demo_only:raise ValueError('지속 목표는 실제 실행 모드에서 사용하세요.')
+                    action=data.get('action')
+                    result=goals.create(data) if action=='create' else goals.review(data) if action=='review' else goals.control(data)
+                    self.send(200,result);return
+                if self.path=='/api/onboarding':
+                    self.send(200,onboarding.recommend(store,data) if data.get('action')=='preview' else onboarding.save(store,data));return
+                if self.path=='/api/team/scores/retry':
+                    with store.connect() as c:
+                        if data.get('kind')=='affinity':raise ValueError('호감도 평가는 제거되었습니다.')
+                        table='peer_score_jobs'
+                        changed=c.execute(f"UPDATE {table} SET state='queued',error='' WHERE task_id=? AND rater=? AND state='failed'",(data.get('task_id'),data.get('rater'))).rowcount
+                    self.send(200,{'queued':bool(changed)});return
+                if self.path=='/api/team/profile':
+                    result=team_profiles.save(store,data)
+                    if not demo_only:slack_auto.request_profiles([data['agent_id']])
+                    self.send(200,result);return
+                if self.path=='/api/office/chat':
+                    self.send(202,office_chat.send(data));return
+                if self.path=='/api/office/task':
+                    self.send(201,office_chat.delegate(data));return
+                if self.path.startswith('/api/resources/'):
+                    import workspace_resources as wr
+                    action=self.path.removeprefix('/api/resources/')
+                    if action=='snapshot':result=worker.resources.snapshot(data.get('refresh') is True)
+                    elif action=='recommend':result=wr.recommend(store,data.get('title',''),data.get('target','host'))
+                    elif action=='policy':result=wr.save_policy(store,data)
+                    elif action=='skill':result=wr.save_skill(store,data)
+                    elif action=='install':
+                        ids=data.get('programs',[])
+                        if not isinstance(ids,list) or not 1<=len(ids)<=10 or any(not isinstance(p,str) or p not in wr.PROGRAM_BY_ID for p in ids):raise ValueError('설치할 프로그램을 선택하세요.')
+                        result={'jobs':[worker.resources.request(pid,target=data.get('target','host')) for pid in dict.fromkeys(ids)]}
+                    else:raise ValueError('지원하지 않는 준비 작업입니다.')
+                    self.send(200,result);return
+                if self.path=='/api/notifications':
+                    action=data.get('action')
+                    result=desktop_notifications.configure(store,data) if action=='settings' else desktop_notifications.claim(store) if action=='claim' else desktop_notifications.acknowledge(store,data) if action=='ack' else desktop_notifications.test(store) if action=='test' else None
+                    if result is None:raise ValueError('알림 작업을 확인하세요.')
+                    self.send(200,result);return
+                if self.path=='/api/git':
+                    import project_git
+                    action=data.get('action')
+                    result=project_git.save(store,data) if action=='save' else project_git.connect(store) if action=='connect' else project_git.publish(store,data.get('task_id'),data.get('agent_id')) if action=='publish' else None
+                    if result is None:raise ValueError('Git 작업을 확인하세요.')
+                    self.send(200,result);return
+                if self.path=='/api/company':
+                    import office
+                    self.send(200,office.save_company(store,data));return
+                if self.path=='/api/office/life':
+                    import office
+                    self.send(200,office.save_life(store,data));return
+                if self.path in ('/api/office/appearance','/api/office/dm'):
+                    import office
+                    if self.path.endswith('/dm') and demo_only:raise ValueError('데모에서는 Slack DM을 열지 않습니다.')
+                    self.send(200,office.save(store,data) if self.path.endswith('/appearance') else office.direct_message(store,data));return
+                if self.path=='/api/slack/auto':
+                    if demo_only:raise ValueError('데모 전용에서는 Slack 봇을 생성하지 않습니다.')
+                    self.send(202,slack_auto.dispatch(data.get('action'),data));return
                 if self.path == '/api/tasks':
+                    if data.get('leader_first') is True and data.get('mode',default_mode)!='demo':
+                        if demo_only:raise ValueError('데모 전용에서는 실제 리더 AI를 사용할 수 없습니다.')
+                        self.send(202,leader_inbox.submit(data));return
                     if demo_only and (data.get('mode',default_mode)!='demo' or data.get('environment','local')!='local'):raise ValueError('데모 전용 실행은 로컬 데모 작업만 접수합니다.')
                     self.send(201,{'id':store.add(data['title'],data.get('mode',default_mode),data.get('acceptance',''),data.get('max_revisions',team_settings(store).get('max_revisions',2)),data.get('auto_recover',True),data.get('required_files',[]),environment=data.get('environment','local'),vm_actions=data.get('vm_actions',[]),request_key=data.get('request_key'),expected_profile_updated=data.get('expected_profile_updated'))})
+                elif self.path=='/api/prompt/refine':
+                    self.send(200,refine_prompt(data,team_settings(store),model,url,demo_only))
                 elif self.path=='/api/backups/create':
                     key=data.get('request_key') or uuid.uuid4().hex
                     with maintenance_lock:
@@ -965,18 +1354,41 @@ def serve(root, port, model, url,demo_only=False):
                     self.send(200,environment_profiles.recommend(data))
                 elif self.path=='/api/setup/vm':
                     self.send(200,worker.vm.save(data))
+                elif self.path=='/api/vm/windows-disk':
+                    if demo_only:raise ValueError('데모에서는 VM 디스크를 만들지 않습니다.')
+                    import windows_guest
+                    with worker.vm.exclusive():self.send(200,windows_guest.create_disk(ROOT))
+                elif self.path=='/api/vm/windows-probe':
+                    if demo_only:raise ValueError('데모에서는 실제 Windows VM에 연결하지 않습니다.')
+                    import windows_guest
+                    with worker.vm.exclusive():
+                        session=worker.vm.session()
+                        if not session or session.get('config',{}).get('guest_os')!='windows':raise ValueError('Windows VM을 먼저 시작하세요.')
+                        info=windows_guest.rpc(worker.vm,'guest-get-osinfo')
+                        if info.get('id')!='mswindows' and 'windows' not in str(info.get('name','')).lower():raise ValueError('게스트가 Windows인지 확인하지 못했습니다.')
+                        result={'session':session['name'],'os':info,'checked_at':time.time()}
+                        write_setting(store,'windows_guest_probe',result);self.send(200,result)
                 elif self.path=='/api/vm/control':
                     action=data.get('action')
                     if action=='start':result=worker.vm.start()
+                    elif action=='start-installation':result=worker.vm.start_installation()
+                    elif action=='restart':result=worker.vm.restart()
                     elif action=='stop':result=worker.vm.stop()
-                    else:raise ValueError('VM 제어는 start 또는 stop입니다.')
+                    else:raise ValueError('VM 제어는 start · start-installation · restart · stop입니다.')
                     store.log('-','user','vm_control',action);self.send(200,result)
+                elif self.path=='/api/vm/pointer':
+                    import base64
+                    result=worker.vm.pointer_input(data)
+                    if 'image' in result:result['image']=base64.b64encode(result['image']).decode('ascii')
+                    self.send(200,result)
                 elif self.path=='/api/vm/input':
                     action=validate_actions([{**data,'role':'developer'}],['developer'])[0]
                     with worker.vm.exclusive():worker.vm.action(action)
                     store.log('-','user','vm_action',json.dumps(action,ensure_ascii=False));self.send(200,{'ok':True})
                 elif self.path=='/api/setup/team':
-                    self.send(200,save_team(store,data))
+                    result=save_team(store,data)
+                    if not demo_only:slack_auto.request_profiles()
+                    self.send(200,result)
                 elif self.path=='/api/setup/slack':
                     self.send(200,save_slack(store,data))
                 elif self.path=='/api/slack/recovery':
@@ -998,6 +1410,8 @@ def serve(root, port, model, url,demo_only=False):
                     self.send(404,{'error':'not found'})
             except SettingsConflict as e:
                 self.send(409,{'error':str(e),'code':'settings_conflict'})
+            except ModelError as e:
+                self.send(502,{'error':str(e),'code':e.code})
             except (ValueError, KeyError, TypeError,UnicodeError) as e:
                 self.send(400,{'error':str(e)})
             except (OSError,sqlite3.Error):
@@ -1010,7 +1424,8 @@ def serve(root, port, model, url,demo_only=False):
         # Bind before recovery or external receive loops can have any effects.
         server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
         registration=app_lifecycle.register(ROOT,port,instance)
-        worker.recover();slack_thread.start();thread.start()
+        worker.recover();git_publication.recover(store);office_chat.recover();leader_inbox.recover();scores.recover();score_thread.start();slack_thread.start();slack_conversation_thread.start();thread.start()
+        if not demo_only:slack_auto.request_profiles();goals.start()
         def watch_stop():
             while not monitor_stop.wait(.2):
                 try:requested=app_lifecycle.stop_requested(ROOT,registration)
@@ -1026,12 +1441,16 @@ def serve(root, port, model, url,demo_only=False):
     except KeyboardInterrupt:
         pass
     finally:
-        monitor_stop.set();worker.stop.set();slack.stop.set()
+        monitor_stop.set();goals.stop.set();worker.stop.set();leader_inbox.stop.set();scores.stop.set();slack.conversations.stop.set();slack.stop.set();slack_auto.close()
         if registration is not None:
             try:app_lifecycle.unregister(ROOT,registration)
             except (OSError,ValueError):pass
         if server is not None:server.server_close()
         if thread.ident is not None:thread.join(timeout=250)
+        if registration is not None and not demo_only:
+            from vm_shutdown import finish_vm_shutdown
+            finish_vm_shutdown(store,worker.vm,thread)
+
         if slack_thread.ident is not None:slack_thread.join(timeout=15)
         if monitor is not None:monitor.join(timeout=2)
         lock.close()
