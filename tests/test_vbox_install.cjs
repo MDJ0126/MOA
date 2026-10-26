@@ -15,7 +15,7 @@ async function main(){
  const input=(id,value)=>{const node=d.querySelector('#'+id);node.value=value;node.dispatchEvent(new w.Event('input',{bubbles:true}))};
  w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.installPending++;try{return await fn(...args)}finally{window.installPending--}};window.installPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.showInstallation=renderVboxInstall;window.installDirty=hasVboxInstallDraft;window.invalidateInstallation=hideVboxPlan;boot();`));
  try{
-  await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vboxInstallOptions').hidden,true);
+  await until(()=>d.querySelectorAll('.office-station').length>0,'boot');assert.equal(d.querySelector('#vboxInstallOptions').hidden,true);
   w.showInstallation(plan,record,null);assert.equal(d.querySelector('#vboxInstallOptions').hidden,false);assert.equal(d.querySelector('#vboxInstallOptions').open,false);assert.equal(d.querySelector('#vboxGuestImage').value,'');assert.equal(d.querySelector('#vboxGuestImage b'),null);
   d.querySelector('[data-action="install-vbox"]').click();await until(()=>d.querySelector('#toast').textContent.includes('판본'),'edition required');assert.equal(requests.length,0);
   input('vboxGuestImage','2');d.querySelector('[data-action="generate-vbox-password"]').click();const generated=d.querySelector('#vboxGuestPassword').value;assert.ok(/^Moa-[a-f0-9]{32}$/.test(generated));assert.equal(w.installDirty(),true);

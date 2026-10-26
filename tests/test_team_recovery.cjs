@@ -17,7 +17,7 @@ async function until(fn){for(let i=0;i<150;i++){if(fn())return;await sleep(25)}t
  d.querySelector('[data-preset="light"]').click();d.querySelector('#saveTeam').click();
  await until(()=>d.querySelector('#teamSaveState').textContent==='저장됨'&&d.querySelector('#onboarding').hidden);
  assert.equal(sent.recovery_token,'a'.repeat(64));assert.equal(sent.expected_updated>=0,true);assert.equal(sent.agents[0].id,'builder');
- assert.equal(d.querySelector('#agent-name-0').value,'빌더');assert.equal(d.querySelector('#onboarding').hidden,true);
+ assert.equal(d.querySelector('#agent-name-0').value,'지우');assert.equal(d.querySelector('#onboarding').hidden,true);
  assert.equal(requests.filter(r=>r.body&&['/api/vm/control','/api/slack/test','/api/setup/slack'].includes(r.path)).length,0);
  console.log('PASS: corrupt team recovery notice, explicit preset save carries original fingerprint, recovery clears; no VM/Slack controls');
  }finally{await sleep(100);w.close()}})().catch(error=>{console.error(error);process.exitCode=1});

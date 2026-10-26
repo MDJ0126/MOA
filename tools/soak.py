@@ -24,13 +24,15 @@ from supervisor import ManagedChild,acquire,write_status
 from app_lifecycle import request_stop
 
 ROOT=Path(__file__).resolve().parent.parent
-MODULES=('source_state','app_lifecycle','stop_app','private_files','vbox_install','vbox_setup','environment_profiles','app','artifacts','backup_jobs','check_process','checks','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
+MODULES=('desktop_notifications','project_git','slack_conversations','research_http','deliverables','web_research','checks','source_state','app_lifecycle','stop_app','private_files','vbox_install','vbox_setup','environment_profiles','prompt_refinement','slack_workflow','slack_media','slack_direct','slack_auto','slack_cli_hook','guest_agent','app','artifacts','backup_jobs','check_process','conversation','data_backup','diagnostics','health','integrations','local_model','model_transport','reports','setup_config','slack_service','supervisor','vm_runtime')
 
 
 def freeze(destination):
     destination.mkdir();(destination/'src').mkdir();(destination/'src/web').mkdir()
-    for name in MODULES:shutil.copyfile(ROOT/'src'/(name+'.py'),destination/'src'/(name+'.py'))
+    for name in (*MODULES,'office','workspace_resources','office_chat','team_profiles','peer_scores','onboarding','organization','leader_inbox'):shutil.copyfile(ROOT/'src'/(name+'.py'),destination/'src'/(name+'.py'))
     for name in ('dashboard.html','ui.css','ui.js'):shutil.copyfile(ROOT/'src/web'/name,destination/'src/web'/name)
+    if (ROOT/'src/web/resource-icons').is_dir():shutil.copytree(ROOT/'src/web/resource-icons',destination/'src/web/resource-icons')
+    if (ROOT/'src/web/profile-candidates').is_dir():shutil.copytree(ROOT/'src/web/profile-candidates',destination/'src/web/profile-candidates')
     shutil.copytree(ROOT/'docs',destination/'docs')
     config={'default_mode':'demo','model':'soak-demo','model_description':'demo-no-inference','model_url':'http://127.0.0.1:0','engine':{'enabled':False},'slack':{'enabled':False}}
     (destination/'config.json').write_text(json.dumps(config),encoding='utf-8')

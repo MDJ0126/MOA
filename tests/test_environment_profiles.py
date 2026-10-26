@@ -52,7 +52,7 @@ class EnvironmentProfilesTests(unittest.TestCase):
 
     def test_persist_cas_and_reject_invalid_inputs(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent.parent) as temp:
-            store=Store(temp);self.assertEqual(settings(store)['target_os'],'auto')
+            store=Store(temp);self.assertEqual(settings(store)['target_os'],'windows')
             saved=save(store,{'target_os':'linux','location':'remote','budget_percent':25,'expected_updated':0})
             self.assertEqual(settings(store),saved)
             with self.assertRaises(SettingsConflict):save(store,{'expected_updated':0})

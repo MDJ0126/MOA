@@ -1,0 +1,16 @@
+const fs=require('fs'),assert=require('assert/strict'),{JSDOM}=require('../runtime/ui-tests/node_modules/jsdom');
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:'http://localhost/#home',runScripts:'outside-only'}),w=dom.window;
+w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.structuredClone=structuredClone;w.AbortController=AbortController;
+w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,'')+';window.mediaTest={cards:mediaCards,message:messageMedia,set(messages){modalMessages=messages}};');
+const t=w.mediaTest;
+let html=t.cards('abcdef123456',[{name:'deliverables/photo.png',bytes:1500},{name:'deliverables/report.md',preview:'<script>alert(1)</script>',bytes:4096}]);
+assert.match(html,/media-image-open/);assert.match(html,/loading="lazy"/);assert.match(html,/4 KB/);assert.match(html,/&lt;script&gt;/);assert.ok(!html.includes('<script>'));
+assert.ok(!t.cards('abcdef123456',[{name:'../secret.png'},{name:'https://example.com/image.png'},{name:'deliverables/../../secret.txt'}]).includes('media-card'));
+const earlier={seq:10,kind:'message',agent:'a',recipient:'b',content:'a → b: '+JSON.stringify({images:['vm/r0-developer-after.png']})};
+const handoff={seq:11,kind:'handoff',agent:'a',recipient:'b',content:JSON.stringify({summary:'Result'})};t.set([earlier,handoff]);
+assert.match(t.message(handoff,'abcdef123456'),/r0-developer-after.png/,'legacy handoff uses its adjacent delivery evidence');
+assert.equal(t.message({...handoff,recipient:'other'},'abcdef123456'),'','unrelated peer receives no attachment');
+dom.window.document.body.insertAdjacentHTML('beforeend',html);dom.window.document.querySelector('[data-media-open]').click();
+assert.ok(dom.window.document.querySelector('#mediaViewer img'),'image opens in an in-app preview');
+assert.match(t.message({seq:20,kind:'research_result',content:JSON.stringify({path:'research/image.jpg',source:'https://commons.wikimedia.org/'})},'abcdef123456'),/workspace%2Fresearch%2Fimage.jpg/,'acquired image previews before task completion');
+console.log('PASS: image cards, file sizes, safe text, blocked paths/URLs, exact legacy delivery pairing, enlarged preview');dom.window.close();

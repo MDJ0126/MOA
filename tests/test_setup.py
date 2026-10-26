@@ -17,7 +17,9 @@ class FakeWeb:
     def auth_test(self):return {'ok':True,'team':'Test workspace','user_id':'UBOT12345'}
     def conversations_info(self,**kwargs):return {'channel':{'name':'agent-room'}}
     def conversations_members(self,**kwargs):return {'members':['UBOT12345'],'response_metadata':{}}
-    def apps_connections_open(self):return {'ok':True,'url':'wss://not-a-real-connection.invalid'}
+    def apps_connections_open(self,*,app_token):
+        assert app_token.startswith('xapp-')
+        return {'ok':True,'url':'wss://not-a-real-connection.invalid'}
     def chat_postMessage(self,**kwargs):
         if self.fail:raise ConnectionError('offline')
         self.posts.append(kwargs);return {'ok':True,'ts':'100.'+str(len(self.posts))}
@@ -145,7 +147,10 @@ class SetupTests(unittest.TestCase):
             store.deliver(tid,'developer','reviewer',{'summary':'check'})
         prepare(self.store);first=send(self.store);self.assertEqual(len(first),1)
         with self.store.connect() as c:c.execute("UPDATE outbox SET state='pending'")
-        self.assertEqual(send(Store(self.temp.name)),first)
+        # A durable Slack receipt prevents a second post after a restart, even
+        # if an interrupted image upload left the outbox pending.
+        self.assertEqual(send(Store(self.temp.name)),[])
+        self.assertEqual(SlackService(Store(self.temp.name)).delivery_namespace,SlackService(self.store).delivery_namespace)
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent.parent) as other:
             store=Store(other);prepare(store)
             self.assertNotEqual(send(store),first)

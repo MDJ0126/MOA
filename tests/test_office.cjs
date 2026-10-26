@@ -1,0 +1,31 @@
+// DOM fixtures exercise presentation only; no model/VM/Slack work is submitted.
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require('../runtime/ui-tests/node_modules/jsdom');
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:'http://127.0.0.1/#home',runScripts:'outside-only',pretendToBeVisual:true});
+const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};
+w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.onclose?.()};
+const team=[{id:'a',name:'지우',capabilities:['planner','developer']},{id:'b',name:'서연',capabilities:['reviewer','reporter']}];
+const calls=[];
+w.fetch=async(path,options={})=>{calls.push([path,options.body]);if(path.startsWith('/api/office/chat?'))return new Response(JSON.stringify({agent_id:new URL(path,'http://localhost').searchParams.get('agent_id'),messages:[]}));if(path==='/api/office/chat'){const p=JSON.parse(options.body);return new Response(JSON.stringify({agent_id:p.agent_id,messages:[{role:'user',content:p.content,state:'completed'},{role:'assistant',content:'안녕하세요.',state:'completed'}]}))}throw Error('Unexpected request '+path)};
+const source=fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,'');
+w.eval(source+'\nwindow.officeTest={set(s){state=s;renderOffice(s.team.agents)},open:openOfficeAgent,activity:officeActivity,scores:renderPeerScores};');
+const base={team:{agents:team},office_appearance:{},tasks:[],messages:[],paused:false};
+w.officeTest.set(base);assert.equal(d.querySelectorAll('.office-station').length,2);assert.match(d.querySelector('.office-live').textContent,/여유로운/);
+const p={agents:team,pipeline:['planner','developer','reviewer'],assignment:{planner:'a',developer:'a',reviewer:'b'}};
+const task={id:'task',title:'실제 상태를 연결한 작업',status:'running',stage:1,execution_plan:JSON.stringify(p),created:Date.now()/1000};
+w.officeTest.set({...base,tasks:[task]});assert.match(d.querySelector('.office-live').textContent,/지우 · 개발 진행 중/);assert.equal(d.querySelectorAll('.is-working').length,1);assert.match(d.querySelector('.office-current').textContent,/2 \/ 3/);
+w.officeTest.set({...base,tasks:[{...task,stage:2}]});assert.equal(d.querySelector('.is-working [data-office-agent]').dataset.officeAgent,'b');
+w.officeTest.set({...base,tasks:[task],paused:true});assert.equal(d.querySelectorAll('.is-working').length,0);assert.match(d.querySelector('.office-live').textContent,/일시 중지/);
+w.officeTest.set({...base,tasks:[{...task,status:'queued',wait_reason:'slack_delivery'}]});assert.match(d.querySelector('.office-speech').textContent,/Slack 전달 대기/);
+w.officeTest.set({...base,tasks:[{...task,status:'failed'}]});assert.match(d.querySelector('.office-live').textContent,/확인 필요 1건/);assert.equal(d.querySelector('.office-attention').dataset.task,'task');
+w.officeTest.set({...base,messages:[{seq:1,kind:'slack_channel_received',agent:'b',content:JSON.stringify({sender:'a'}),created:Date.now()/1000}]});assert.match(d.querySelector('.office-footer').textContent,/지우 → 서연 · Slack 수신 확인/);assert.ok(d.querySelector('.office-envelope'));
+w.officeTest.set({...base,messages:[{seq:2,kind:'slack_channel_received',agent:'a',content:JSON.stringify({sender:'b'}),created:Date.now()/1000-30}]});assert.match(d.querySelector('.office-footer').textContent,/서연 → 지우/);assert.equal(d.querySelector('.office-envelope'),null);
+w.officeTest.set({...base,team:{agents:[...team,...Array.from({length:6},(_,i)=>({id:'extra'+i,name:'팀원'+i,capabilities:['developer']}))]}});assert.equal(d.querySelectorAll('.office-station').length,8);
+w.officeTest.set(base);d.querySelector('[data-office-agent="b"]').click();assert.equal(d.querySelector('.office-profile h2').textContent,'서연');
+assert.equal(calls[0][0],'/api/office/chat?agent_id=b');
+w.officeTest.scores({agent_id:'b',total:-3,count:1,jobs:[],logs:[{rater_name:'지우',target_name:'서연',target:'b',points:-3,created:1,task_id:'task',task_title:'검증 업무',reason:'<script>실제 근거로 평가한 사유</script>',evidence:[{seq:9,capability:'reviewer',content:'검증 결과 기록'}]}]});
+assert.match(d.querySelector('#peerScoreSummary').textContent,/-3점.*1회/);assert.match(d.querySelector('#peerScoreLogs').textContent,/지우 → 서연/);assert.match(d.querySelector('#peerScoreLogs').textContent,/검증 결과 기록/);assert.equal(d.querySelector('#peerScoreLogs script'),null);
+
+w.officeTest.scores({agent_id:'b',total:52,count:1,jobs:[],logs:[],pairs:[{rater:'a',target:'b',total:52,count:1}]},'affinity');assert.match(d.querySelector('#affinityScoreSummary').textContent,/호감도.*52점/);assert.match(d.querySelector('#affinityScoreLogs').textContent,/지우 → 서연/);assert.match(d.querySelector('#peerScoreSummary').textContent,/-3점/);
+const hair=d.querySelector('[data-office-part="hair"]');hair.value='3';hair.dispatchEvent(new w.Event('change',{bubbles:true}));assert.match(d.querySelector('#officeSaveStatus').textContent,/저장/);
+setTimeout(async()=>{try{assert.equal(d.querySelector('#officeDMLink'),null);d.querySelector('#officeChatText').value='안녕하세요';d.querySelector('[data-office-send]').click();await new Promise(r=>setTimeout(r,30));assert.match(d.querySelector('#officeChatMessages').textContent,/안녕하세요/);assert.equal(JSON.parse(calls.find(c=>c[0]==='/api/office/chat')[1]).agent_id,'b');assert.ok(!calls.some(c=>c[0].includes('/dm')||c[0].includes('/slack')));d.querySelector('#officeChatText').value='서연 초안';w.officeTest.open('a');d.querySelector('#officeChatText').value='지우 초안';w.officeTest.open('b');assert.equal(d.querySelector('#officeChatText').value,'서연 초안');await new Promise(r=>setTimeout(r,30));console.log('PASS: office activity, character parts, local per-agent conversation, isolated drafts, no Slack requests. DOM fixtures only.');dom.window.close()}catch(error){console.error(error);process.exitCode=1;dom.window.close()}},50);

@@ -15,6 +15,15 @@ from unittest.mock import patch
 
 
 class BackupTests(unittest.TestCase):
+    def test_cli_login_credentials_are_excluded_from_backups(self):
+        folder=self.source/'slack-auto';folder.mkdir()
+        (folder/'credentials.json').write_text('private-cli-login',encoding='utf-8')
+        project=folder/'person-builder';project.mkdir();(project/'registration.bin').write_bytes(b'private-envelope')
+        backup(self.source,self.archive)
+        with zipfile.ZipFile(self.archive) as z:
+            self.assertFalse(any(name.startswith('slack-auto/') for name in z.namelist()))
+            self.assertTrue(any('state.sqlite3' in name for name in z.namelist()))
+
     def test_restored_queue_waits_for_resume_and_executes_once(self):
         tid=self.store.add('queued before backup','demo')
         with self.store.connect() as connection:

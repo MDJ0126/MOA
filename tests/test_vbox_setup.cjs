@@ -23,7 +23,7 @@ async function main(){
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error(label+' / '+d.querySelector('#toast').textContent)}
  w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.vboxPending++;try{return await fn(...args)}finally{window.vboxPending--}};window.vboxPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
  try{
-  await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vboxOptions').open,false);
+  await until(()=>d.querySelectorAll('.office-station').length>0,'boot');assert.equal(d.querySelector('#vboxOptions').open,false);
   input('profileLocation','shared_vm');input('profileOS','windows');input('vboxIso','runtime/install.iso','input');click('plan-vbox');
   await until(()=>!d.querySelector('[data-action="prepare-vbox"]').hidden,'reviewed plan shown');
   assert.ok(d.querySelector('#vboxSummary').textContent.includes('CPU 2개'));assert.equal(d.querySelector('#vboxCommands img'),null);

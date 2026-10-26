@@ -14,7 +14,7 @@ async function main(){
  async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await sleep(40)}throw Error(label+' / '+d.querySelector('#toast').textContent)}
  w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.routingPending++;try{return await fn(...args)}finally{window.routingPending--}};window.routingPending=0;busy=track(busy);poll=track(poll);boot=track(boot);boot();`));
  try{
-  await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');
+  await until(()=>d.querySelectorAll('.office-station').length>0,'boot');
   input('profileOS','auto');input('profileLocation','host');d.querySelector('[data-action="save-profile"]').click();
   await until(()=>d.querySelector('#toast').textContent.includes('선호 환경을 저장'),'host preference saved');
   input('taskEnvironment','profile');input('taskMode','demo');input('taskTitle','Native profile DOM queued only');

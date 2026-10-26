@@ -18,7 +18,7 @@ async function main(){
  w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,`const track=fn=>async(...args)=>{window.stepPending++;try{return await fn(...args)}finally{window.stepPending--}};window.stepPending=0;busy=track(busy);poll=track(poll);boot=track(boot);window.stepRefresh=refresh;boot();`));
  let taskId;
  try{
-  await until(()=>d.querySelectorAll('.agent-card').length>0,'boot');assert.equal(d.querySelector('#vmActionOptions').hidden,true);
+  await until(()=>d.querySelectorAll('.office-station').length>0,'boot');assert.equal(d.querySelector('#vmActionOptions').hidden,true);
   d.querySelector('#taskOptions').open=true;input('#taskEnvironment','vm','change');assert.equal(d.querySelector('#vmActionOptions').hidden,false);d.querySelector('#vmActionOptions').open=true;
   click('[data-action="add-vm-step"]');assert.deepEqual(raw(),[{role:'developer',action:'key',keys:['ret']}]);input('[data-vm-field="keys"]',JSON.stringify(['ctrl','a']),'change');assert.deepEqual(raw()[0].keys,['ctrl','a']);
   input('[data-vm-step="0"][data-vm-field="role"]','reviewer','change');input('[data-vm-step="0"][data-vm-field="action"]','text','change');input('[data-vm-step="0"][data-vm-field="text"]','<b>guest text</b>');assert.equal(d.querySelector('#vmActionSteps b'),null);

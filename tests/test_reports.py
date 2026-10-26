@@ -25,7 +25,7 @@ class ReportTests(unittest.TestCase):
 
     def test_readable_snapshot_and_bundle_have_matching_evidence(self):
         rendered=(self.folder/'report.md').read_text(encoding='utf-8')
-        self.assertIn('빌더',rendered);self.assertIn('개발',rendered);self.assertIn('체커',rendered)
+        self.assertIn('지우',rendered);self.assertIn('개발',rendered);self.assertIn('서연',rendered)
         self.assertIn('실제 AI 추론과 실행 테스트 없음',rendered)
         self.assertNotIn('<script>',rendered)
         self.assertNotIn('"content":',rendered)

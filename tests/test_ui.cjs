@@ -23,7 +23,7 @@ async function until(fn,description){for(let i=0;i<150;i++){if(fn())return;await
 function click(selector){const node=d.querySelector(selector);assert.ok(node,selector);node.click()}
 function input(selector,value,event='input'){const node=d.querySelector(selector);assert.ok(node,selector);node.value=value;node.dispatchEvent(new w.Event(event,{bubbles:true}))}
 async function main(){
- await until(()=>d.querySelectorAll('.agent-card').length===4,'initial team');
+ await until(()=>d.querySelectorAll('.office-station').length===4,'initial team');
  assert.equal(d.querySelector('#machineCpu').textContent,'CPU 정보 미확인');
  assert.equal(d.querySelector('#hardwareSummary').textContent,'CPU 정보 미확인');
  w.testVMStatus({state:'unreachable',owner:null,owner_unavailable:true,error:'fixture owner record unavailable'});
@@ -58,9 +58,9 @@ async function main(){
  input('#requiredFiles','');input('#acceptance','');input('#taskEnvironment','local','change');input('#taskMode','demo','change');assert.equal(d.querySelector('#taskOptionsSummary').textContent,'');
 
  click('[data-action="recommended"]');await until(()=>!d.querySelector('#page-settings').hidden,'settings navigation');
- assert.equal(d.querySelectorAll('.agent-editor').length,2);
+ assert.equal(d.querySelectorAll('.agent-editor').length,4);
  input('#agent-name-0','저장 전 이름');assert.ok(d.querySelector('#teamSaveState').textContent.includes('저장하지'));
- click('[data-action="reset-team"]');assert.equal(d.querySelector('#agent-name-0').value,'계획 담당');
+ click('[data-action="reset-team"]');assert.equal(d.querySelector('#agent-name-0').value,'하준');
  click('[data-preset="light"]');
  input('#agent-name-0','테스트 빌더');click('#saveTeam');
  await until(()=>d.querySelector('#toast').textContent.includes('팀 구성을 저장했습니다'),'team save');
@@ -72,7 +72,7 @@ async function main(){
  click('[data-action="reload-settings"]');await until(()=>d.querySelector('#toast').textContent.includes('최신 저장 버전'),'refresh version without losing draft');
  assert.equal(d.querySelector('#agent-name-0').value,'유지할 입력');click('#saveTeam');await until(()=>d.querySelector('#toast').textContent.includes('팀 구성을 저장'),'save after reviewing conflict');
  click('[data-preset="compact"]');click('#saveTeam');
- await until(()=>d.querySelectorAll('.agent-card').length===1,'compact saved');
+ await until(()=>d.querySelectorAll('.office-station').length===1,'compact saved');
  w.location.hash='home';await until(()=>!d.querySelector('#page-home').hidden,'home navigation');
  input('#taskTitle','DOM 시험: <script>alert(1)</script> 작업');input('#taskMode','demo','change');input('#requiredFiles','NUL.txt');click('#submitTask');
  await until(()=>requests.some(r=>r.path==='/api/tasks')&&!d.querySelector('#submitTask').disabled,'invalid file submission finished');
@@ -81,7 +81,7 @@ async function main(){
  input('#requiredFiles','');click('#submitTask');
  await until(()=>d.querySelector('#toast').textContent.includes('response lost'),'unknown submission outcome');
  assert.ok(d.querySelector('#taskTitle').value.includes('DOM 시험'));click('#submitTask');
- await until(()=>!d.querySelector('#taskModal').hidden,'task modal');
+ await until(()=>!d.querySelector('#submitTask').disabled&&d.querySelector('#taskTitle').value==='','task accepted');assert.equal(d.querySelector('#taskModal').hidden,true);await until(()=>d.querySelector('#recentTasks [data-task]'),'task row');click('#recentTasks [data-task]');await until(()=>!d.querySelector('#taskModal').hidden,'manual task modal');
  await until(()=>d.querySelector('#modalMeta').textContent.includes('완료'),'actual demo completed');
  assert.ok(d.querySelector('#modalTitle').textContent.includes('<script>'));
  assert.equal(d.querySelectorAll('#modalTitle script').length,0);
@@ -171,7 +171,7 @@ async function main(){
  }
  assert.ok(d.querySelector('.sidebar [data-page="work"]').getAttribute('aria-label'));
  w.location.hash='settings/slack';await until(()=>!d.querySelector('#panel-slack').hidden,'slack tab');
- d.querySelector('#tab-slack').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await until(()=>!d.querySelector('#panel-team').hidden,'keyboard tab navigation');
+ d.querySelector('#tab-slack').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await until(()=>!d.querySelector('#panel-organization').hidden,'organization keyboard navigation');d.querySelector('#tab-organization').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await until(()=>!d.querySelector('#panel-team').hidden,'keyboard tab navigation');
  assert.equal(d.querySelector('#tab-team').tabIndex,0);click('#tab-slack');await until(()=>!d.querySelector('#panel-slack').hidden,'keyboard return');
  input('#slackChannel','C12345678');input('#slackUsers','U12345678');input('[data-connection-field="bot_token"]','xoxb-ui-test');input('[data-connection-field="app_token"]','xapp-ui-test');
  assert.ok(d.querySelector('#slackSaveState').textContent.includes('저장하지 않은'));
@@ -198,7 +198,7 @@ async function main(){
  assert.equal(d.querySelector('#vmMemory').value,'2048');assert.ok(d.querySelector('#vmSaveState').textContent.includes('저장하지'));
  click('[data-action="save-vm"]');await until(()=>d.querySelector('#settingsConflict').hidden,'VM reviewed conflict save');
  assert.equal((await(await fetch(base+'/api/vm')).json()).config.memory_mb,2048);
- assert.deepEqual([...d.querySelector('#taskEnvironment').options].map(option=>option.value),['local','profile','vm']);
+ assert.deepEqual([...d.querySelector('#taskEnvironment').options].map(option=>option.value),['local','profile','vm','guest']);
  d.querySelector('#maintenanceOptions').open=true;click('[data-action="diagnose"]');await until(()=>d.querySelector('#installationChecks').textContent.includes('Python'),'installation diagnostics');
  await until(()=>d.querySelector('#installationChecks').textContent.includes('서버 응답 확인'),'observed service health');
  assert.ok(d.querySelector('#installationChecks').textContent.includes('서버 변경 적용'));
@@ -258,7 +258,7 @@ async function main(){
  assert.equal(recoveryPosts[1].action,'dismiss');w.fetch=beforeRecoveryFetch;}
  docFailure=true;w.location.hash='docs/slack';await until(()=>d.querySelector('[data-action="retry-doc"]'),'guide error and retry');
  docFailure=false;click('[data-action="retry-doc"]');
- await until(()=>d.querySelector('#docContent h1')?.textContent==='Slack 연결하기','built-in guide');
+ await until(()=>d.querySelector('#docContent h1')?.textContent==='팀원 봇 만들기','built-in guide');
  assert.ok(d.querySelectorAll('#docNav a').length>=8);
  {
  const catalog=await(await fetch(base+'/api/docs')).json(),beforeRaceFetch=w.fetch;

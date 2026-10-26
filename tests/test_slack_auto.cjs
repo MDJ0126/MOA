@@ -1,0 +1,11 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require('../runtime/ui-tests/node_modules/jsdom');
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:'http://127.0.0.1/#settings/slack',runScripts:'outside-only',pretendToBeVisual:true});
+const w=dom.window,d=w.document;w.structuredClone=structuredClone;w.AbortController=AbortController;w.scrollTo=()=>{};
+const posts=[],team={agents:[{id:'builder',name:'지우'},{id:'checker',name:'서연'}]};
+w.fetch=async(path,options)=>{assert.equal(path,'/api/slack/auto');posts.push(JSON.parse(options.body));return new Response(JSON.stringify({accounts:[{team_id:'TTEST123'}],bots:[{agent_id:'builder'}]}))};
+w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,'')+'\nwindow.testPanel={render(s){setup={team:'+JSON.stringify(team)+',slack:{connections:[]}};state={slack_status:{state:"disabled"}};renderSlackAuto(s)}}');
+w.testPanel.render({accounts:[{team_id:'TTEST123'}]});
+assert.equal(d.querySelectorAll('.slack-person-row').length,2);assert.equal(d.querySelector('#slackAutoName'),null);assert.equal(d.querySelector('#slackAutoImage'),null);assert.equal(d.querySelector('.manual-slack').open,false);
+d.querySelector('[data-connect-person="builder"]').click();
+setTimeout(()=>{try{assert.deepEqual(posts[0],{action:'add',agent_id:'builder',team_id:'TTEST123'});assert.match(d.querySelector('.slack-person-row').textContent,/지우.*연결됨/);assert.equal(d.querySelectorAll('[data-connect-person]').length,1);console.log('PASS: compact per-agent rows, right-side connection status, canonical profiles, credential-free connect. API fixture only.')}catch(e){console.error(e);process.exitCode=1}finally{w.close()}},30);

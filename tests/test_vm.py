@@ -14,6 +14,61 @@ from supervisor import write_status
 from setup_config import SettingsConflict,read_setting
 
 class VMTests(unittest.TestCase):
+    def test_observer_frames_ignore_desktop_lease_and_share_bounded_cache(self):
+        path=Path(self.temp.name)/'observer.png';path.write_bytes(b'PNG observer fixture')
+        with patch.object(self.vm,'session',return_value={'name':'boot-a','pid':123}),patch.object(self.vm,'capture',return_value=path) as capture:
+            with self.vm.exclusive():
+                self.assertEqual(self.vm.screen_frame(),b'PNG observer fixture')
+                self.assertEqual(self.vm.screen_frame(),b'PNG observer fixture')
+                self.assertTrue(self.vm.thread_lock.locked())
+            capture.assert_called_once()
+        with patch.object(self.vm,'session',return_value={'name':'boot-b','pid':124}),patch.object(self.vm,'capture',return_value=path) as capture:
+            self.vm.screen_frame();capture.assert_called_once()
+    def test_boot_memory_status_matches_admission_threshold(self):
+        from vm_runtime import boot_memory
+        for available,expected in ((1.8,False),(2.99,False),(3,True),(4,True),(None,None)):
+            with patch('vm_runtime.hardware',return_value={'available_ram_gib':available}):
+                reading=boot_memory({'memory_mb':2048})
+                self.assertIs(reading['can_start'],expected)
+                self.assertEqual(reading['required_gib'],3)
+                self.assertEqual(self.vm.status()['boot_memory']['available_gib'],available)
+    def test_live_pointer_moves_and_captures_before_release(self):
+        path=Path(self.temp.name)/'pointer.png';path.write_bytes(b'PNG fixture')
+        with patch.object(self.vm,'qmp') as qmp,patch.object(self.vm,'capture',return_value=path):
+            token=self.vm.pointer_input({'action':'begin','x':10,'y':20})['token']
+            self.assertTrue(self.vm.thread_lock.locked())
+            with self.assertRaises(BusyVM):
+                with self.vm.exclusive():pass
+            frame=self.vm.pointer_input({'action':'move','x':100,'y':200,'token':token})
+            self.assertEqual(frame['image'],b'PNG fixture')
+            self.assertFalse(any(e['type']=='btn' and not e['data']['down'] for call in qmp.call_args_list for e in call.args[1]['events']))
+            self.vm.pointer_input({'action':'end','x':110,'y':210,'token':token})
+            self.assertTrue(any(e['type']=='btn' and not e['data']['down'] for call in qmp.call_args_list for e in call.args[1]['events']))
+
+    def test_live_pointer_disconnect_timeout_releases_button_and_lock(self):
+        import time
+        from vm_runtime import LivePointer
+        with patch.object(self.vm,'qmp') as qmp,patch.object(LivePointer,'idle_timeout',.05):
+            self.vm.pointer_input({'action':'begin','x':10,'y':20,'button':'right'})
+            deadline=time.monotonic()+1
+            while not self.vm.live_pointer.closed and time.monotonic()<deadline:time.sleep(.01)
+            self.assertTrue(self.vm.live_pointer.closed)
+            self.assertFalse(self.vm.thread_lock.locked())
+            self.assertEqual(qmp.call_args.args[1]['events'],[{'type':'btn','data':{'down':False,'button':'right'}}])
+    def test_drag_validates_path_and_releases_on_failure(self):
+        action={'role':'developer','action':'drag','x':100,'y':200,'button':'right','points':[{'x':300,'y':400}]}
+        clean=validate_actions([action],['developer'])[0]
+        with patch.object(self.vm,'qmp',side_effect=[None,None,OSError('move failed'),None]) as qmp,patch('vm_runtime.time.sleep'):
+            with self.assertRaisesRegex(OSError,'move failed'):self.vm.action(clean)
+            self.assertEqual(qmp.call_args.args[1]['events'],[{'type':'btn','data':{'down':False,'button':'right'}}])
+        for points in ([],[{'x':True,'y':2}],[{'x':32768,'y':2}], [{'x':1,'y':2}]*61):
+            with self.assertRaises(ValueError):validate_actions([{**action,'points':points}],['developer'])
+    def test_dead_vm_is_stopped_but_live_unreachable_is_preserved(self):
+        for alive,expected in ((False,'stopped'),(True,'unreachable')):
+            with patch.object(self.vm,'session',return_value={'pid':123}),patch.object(self.vm,'qmp',side_effect=OSError('offline')),patch('vm_runtime.pid_alive',return_value=alive):
+                status=self.vm.status()
+                self.assertEqual(status['state'],expected)
+                self.assertEqual(bool(status['error']),alive)
     def test_failed_mouse_input_attempts_only_button_release(self):
         for phase in ('press','release'):
             for release_fails in (False,True):
@@ -173,7 +228,7 @@ class VMTests(unittest.TestCase):
         local=self.store.add('local','demo');worker.tick()
         self.assertEqual(next(t for t in self.store.snapshot()['tasks'] if t['id']==local)['status'],'completed')
     def test_configuration_rejects_escape_and_unsupported_resources(self):
-        for change in ({'iso':'../outside.iso'},{'memory_mb':8192},{'cpus':8},{'accelerator':'arbitrary'},{'network':'false'}):
+        for change in ({'iso':'../outside.iso'},{'memory_mb':65536},{'cpus':16},{'accelerator':'arbitrary'},{'network':'false'}):
             with self.subTest(change=change),self.assertRaises(ValueError):self.vm.save(dict(DEFAULT,**change))
 
     def test_unreachable_live_vm_does_not_spawn_a_second_vm(self):

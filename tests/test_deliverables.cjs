@@ -1,0 +1,7 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),{JSDOM}=require('../runtime/ui-tests/node_modules/jsdom');
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:'http://127.0.0.1/#home',runScripts:'outside-only'}),w=dom.window;w.structuredClone=structuredClone;w.AbortController=AbortController;
+w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,'')+'\nwindow.outputTest=(files,tech=false)=>{artifactInfo={task_id:"job",files};technical=tech;return artifactActions({id:"job"})}');
+const files=[{name:'deliverables/report.html',kind:'deliverable',label:'report.html'},{name:'deliverables/report.md',kind:'deliverable',label:'report.md'},{name:'results.zip'},{name:'artifacts.zip'},{name:'report.json'}];
+const normal=w.outputTest(files);assert.match(normal,/리서치 보고서 \(HTML\)/);assert.match(normal,/결과 파일만 묶어 받기/);assert.doesNotMatch(normal,/file=artifacts.zip|검증 기록 JSON/);assert.match(w.outputTest(files,true),/내부 실행 기록 ZIP/);
+const escaped=w.outputTest([{name:'deliverables/name.txt',kind:'deliverable',label:'<img src=x onerror=alert(1)>'}]);assert.ok(!escaped.includes('<img'));assert.match(escaped,/&lt;img/);assert.doesNotMatch(w.outputTest([{name:'deliverables/answer.txt',kind:'deliverable'},{name:'results.zip'}]),/묶어 받기/);
+console.log('PASS: direct deliverables, human report labels, clean bundle, internal records hidden, escaped filenames');

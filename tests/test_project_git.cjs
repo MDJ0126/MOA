@@ -1,0 +1,10 @@
+const fs=require('fs'),assert=require('assert/strict'),{JSDOM}=require('../runtime/ui-tests/node_modules/jsdom');
+const dom=new JSDOM(fs.readFileSync('src/web/dashboard.html','utf8'),{url:'http://127.0.0.1/#settings/environment',runScripts:'outside-only'}),w=dom.window,d=w.document;
+w.structuredClone=structuredClone;w.AbortController=AbortController;w.HTMLDialogElement.prototype.showModal=function(){this.open=true};
+w.eval(fs.readFileSync('src/web/ui.js','utf8').replace(/boot\(\);\s*$/,'')+';window.gitTest={set(value,task){state=value;activeTask=task.id;modalMessages=[];renderProjectGit();renderModal()},render:renderProjectGit};');
+const agents=[{id:'lead',name:'팀장',capabilities:['planner']},{id:'dev',name:'개발 담당자',capabilities:['developer']}],p={agents,pipeline:['planner','developer'],assignment:{planner:'lead',developer:'dev'},environment:{kind:'local'}},task={id:'abcdef123456',title:'Git result',status:'completed',stage:2,execution_plan:JSON.stringify(p)};
+w.gitTest.set({team:{agents},tasks:[task],messages:[],project_git:{url:'https://github.com/example/project.git',branch:'main',authors:{dev:'developer@example.test'},connected:true}},task);
+assert.equal(d.querySelectorAll('[data-git-author]').length,2);
+d.querySelector('#projectGitUrl').value='https://github.com/example/draft.git';w.gitTest.render();assert.match(d.querySelector('#projectGitUrl').value,/draft/,'polling preserves unsaved address');
+d.querySelector('[data-project-git-publish]').click();assert.equal(d.querySelector('#gitPublishAuthor').value,'dev','developer is the default author, not the leader or uploader');assert.match(d.querySelector('#gitPublishDialog').textContent,/개발 담당자 · developer@example.test/);assert.match(d.querySelector('#gitPublishDialog').textContent,/work\/프로젝트명/);
+console.log('PASS: Git address draft, per-agent identities, developer author default and explicit publication UI');w.close();

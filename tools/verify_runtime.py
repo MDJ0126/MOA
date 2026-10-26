@@ -34,7 +34,10 @@ request=urllib.request.Request(base+'/v1/chat/completions',json.dumps(payload).e
 with urllib.request.urlopen(request,timeout=60) as response:reply=json.load(response)['choices'][0]['message']['content']
 assert 'READY' in reply,reply
 loaded=memory();started=time.time()
-for _ in range(90):
+config=json.loads((root/'config.json').read_text(encoding='utf-8'))
+idle_seconds=int(config.get('sleep_idle_seconds',300))
+if idle_seconds<=0:raise RuntimeError('Idle unloading verification requires sleep_idle_seconds > 0')
+for _ in range(idle_seconds+60):
     props=get('/props')
     if props.get('is_sleeping'):break
     time.sleep(1)
